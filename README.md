@@ -1,4 +1,4 @@
-﻿<div align="center">
+<div align="center">
 
 # 🤖 ctrl-cli
 
@@ -25,15 +25,17 @@ Biner hanya **~1.8 MB** dengan penggunaan RAM yang minimal.
 
 ### ✨ Fitur Utama
 
-| Fitur | Keterangan |
-|-------|------------|
+| 🤖 Autonomous Agent | ReAct execution loop otonom untuk inspeksi & eksekusi kode |
+| 🛠️ 9 Built-in Tools | Tools ala `fx` (`read`, `write`, `edit`, `glob`, `grep`, `shell`, dll.) |
+| 🛡️ Permission Gate | Kebijakan keamanan interaktif (`Ask`, `AutoApprove`, `ReadOnly`) |
 | 🖥️ Mode REPL | Chat interaktif langsung di terminal |
-| ⚡ Mode Generate | Generate kode dari satu baris perintah |
-| 🎯 Skill Spesialis | 8 skill built-in (Rust Expert, Debugger, dll.) |
+| ⚡ Mode Generate | Eksekusi tugas & generate kode dari satu baris perintah |
+| 📊 Token & Context | Pantau penggunaan token & kapasitas context window |
+| 🎯 Skill Spesialis | 8 skill built-in + support muat `SKILL.md` lokal |
 | 🔄 Ganti Model | Beralih antar model AI kapan saja di REPL |
 | 🔌 Multi-Provider | Support OpenAI, DeepSeek, Groq, OpenRouter, dll. |
 | 👤 User Profile | Personalisasi nama, tech stack, bahasa respons |
-| 📦 Biner Kecil | ~1.8 MB, LTO optimized, siap jalan tanpa install |
+| 📦 Biner Kecil | ~2.0 MB, LTO optimized, siap jalan tanpa install |
 
 ### 🎯 Skill yang Tersedia
 
@@ -111,6 +113,9 @@ cargo build --release
 
 # Atau langsung generate kode
 ./target/release/ctrl-cli generate "buat fungsi quicksort di Rust"
+
+# Generate kode dengan metrik token & context window
+./target/release/ctrl-cli generate -t "buat fungsi quicksort di Rust"
 ```
 
 ### 💬 Cara Pakai REPL
@@ -123,25 +128,29 @@ Setelah dijalankan, kamu akan masuk ke mode REPL:
  Active Model: gpt-4o-mini
  Type your prompt and press Enter.
  Ketik `/` untuk rekomendasi interaktif (geser panah ↑ / ↓).
+ Commands: /tokens, /model, /skill, /dev, /profile, /info, /clear, /help, /exit
 ══════════════════════════════════════════════════════════════
 
 [gpt-4o-mini] ➜ 
 ```
 
-Cukup ketik pertanyaan atau permintaan kode, lalu tekan Enter!
+Cukup ketik pertanyaan atau permintaan kode, lalu tekan Enter! Di bawah setiap respon, badge token akan muncul otomatis (misal: `📊 [Tokens: 120 in + 350 out = 470 total | Context: 0.37% of 128k]`).
 
 ### ⌨️ Slash Commands
 
 | Perintah | Fungsi |
 |----------|--------|
 | `/` | Buka menu interaktif (pilih dengan ↑↓) |
+| `/save [file]` | Simpan kode respon terakhir langsung ke file (auto-detect nama file) |
+| `/tokens` | Cek statistik token (in/out/total) & batas context window |
+| `/tokens toggle` | Aktifkan/nonaktifkan badge token otomatis setelah respon |
 | `/model` | Pilih model AI dari daftar |
 | `/model <nama>` | Ganti model langsung (contoh: `/model deepseek-chat`) |
 | `/skill` | Pilih skill spesialis dari daftar |
 | `/skill <id>` | Aktifkan skill tertentu (contoh: `/skill rust-expert`) |
 | `/skill reset` | Nonaktifkan skill, kembali ke General Assistant |
 | `/profile` | Lihat profil developer aktif |
-| `/info` | Cek konfigurasi endpoint & model aktif |
+| `/info` | Cek endpoint, model aktif, context window & total token sesi |
 | `/clear` | Bersihkan layar terminal |
 | `/help` | Tampilkan bantuan |
 | `/exit` | Keluar dari REPL |
@@ -151,6 +160,12 @@ Cukup ketik pertanyaan atau permintaan kode, lalu tekan Enter!
 ```bash
 # Generate kode biasa
 ctrl-cli generate "buat struct linked list di Rust"
+
+# Simpan langsung ke file (-o atau --output) tanpa membanjiri chat terminal
+ctrl-cli generate -o index.html "buat website html landing page responsif"
+
+# Menampilkan metrik token & context window (-t atau --tokens)
+ctrl-cli generate -t "buat struct linked list di Rust"
 
 # Dengan skill spesifik
 ctrl-cli generate --skill rust-expert "implementasi binary search tree"
@@ -188,6 +203,7 @@ Binary size is only **~1.8 MB** with minimal RAM usage.
 |---------|-------------|
 | 🖥️ REPL Mode | Interactive chat directly in terminal |
 | ⚡ Generate Mode | Generate code from a single command |
+| 📊 Token & Context | Monitor token consumption & model context window limit |
 | 🎯 Specialist Skills | 8 built-in skills (Rust Expert, Debugger, etc.) |
 | 🔄 Model Switching | Switch AI models anytime within REPL |
 | 🔌 Multi-Provider | Supports OpenAI, DeepSeek, Groq, OpenRouter, etc. |
@@ -270,6 +286,9 @@ cargo build --release
 
 # Or generate code directly
 ./target/release/ctrl-cli generate "write a quicksort in Rust"
+
+# Generate code with token & context window metrics
+./target/release/ctrl-cli generate -t "write a quicksort in Rust"
 ```
 
 ### 💬 Using the REPL
@@ -281,25 +300,29 @@ After running, you will enter REPL mode:
  🤖 ctrl-cli REPL (AI Coding Agent)
  Active Model: gpt-4o-mini
  Type your prompt and press Enter.
+ Commands: /tokens, /model, /skill, /dev, /profile, /info, /clear, /help, /exit
 ══════════════════════════════════════════════════════════════
 
 [gpt-4o-mini] ➜ 
 ```
 
-Just type your question or code request and press Enter!
+Just type your question or code request and press Enter! A token usage badge will automatically display below each response (e.g. `📊 [Tokens: 120 in + 350 out = 470 total | Context: 0.37% of 128k]`).
 
 ### ⌨️ Slash Commands
 
 | Command | Function |
 |---------|----------|
 | `/` | Open interactive menu (navigate with ↑↓) |
+| `/save [file]` | Save last generated code snippet directly to file (auto-detects filename) |
+| `/tokens` | Check token statistics (in/out/total) & context window capacity |
+| `/tokens toggle` | Enable or disable the automatic token badge below responses |
 | `/model` | Select AI model from a list |
 | `/model <name>` | Switch model directly (e.g. `/model deepseek-chat`) |
 | `/skill` | Pick a specialist skill from a list |
 | `/skill <id>` | Activate a specific skill (e.g. `/skill rust-expert`) |
 | `/skill reset` | Deactivate skill, return to General Assistant |
 | `/profile` | View active developer profile |
-| `/info` | Check active endpoint & model config |
+| `/info` | Check active endpoint, model, context window & session token total |
 | `/clear` | Clear terminal screen |
 | `/help` | Show help |
 | `/exit` | Exit REPL |
@@ -309,6 +332,12 @@ Just type your question or code request and press Enter!
 ```bash
 # Basic code generation
 ctrl-cli generate "create a linked list struct in Rust"
+
+# Write directly to file (-o or --output) without flooding chat output
+ctrl-cli generate -o index.html "create a modern responsive HTML website landing page"
+
+# Display token usage and context window metrics (-t or --tokens)
+ctrl-cli generate -t "create a linked list struct in Rust"
 
 # With a specific skill
 ctrl-cli generate --skill rust-expert "implement a binary search tree"

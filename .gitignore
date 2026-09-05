@@ -1,5 +1,6 @@
 # Build artifacts
 /target/
+/.ctrl/
 
 # Environment variables (keep .env.example, ignore .env)
 .env
