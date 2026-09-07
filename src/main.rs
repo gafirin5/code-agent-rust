@@ -5,11 +5,16 @@ mod types;
 use agent::memory::MemoryManager;
 use agent::orchestrator::run_agent_loop;
 use agent::permissions::{PermissionGate, PermissionMode};
+use agent::probe::{probe_provider_and_model, resolve_model_limits};
+use agent::provider::{
+    load_providers_registry, ApiProtocol, ProviderConfig, ProvidersRegistry,
+};
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 use inquire::autocompletion::{Autocomplete, Replacement};
 use inquire::error::CustomUserError;
-use inquire::{InquireError, Select, Text};
+use inquire::ui::{Color, RenderConfig, Styled};
+use inquire::{Confirm, InquireError, Select, Text};
 use serde::{Deserialize, Serialize};
 use std::io::{IsTerminal, Write};
 use std::path::PathBuf;
@@ -57,13 +62,13 @@ fn default_true() -> bool {
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
-struct UserProfile {
-    name: String,
-    tech_stack: Vec<String>,
-    response_language: String,
-    coding_style: String,
+pub struct UserProfile {
+    pub name: String,
+    pub tech_stack: Vec<String>,
+    pub response_language: String,
+    pub coding_style: String,
     #[serde(default = "default_true")]
-    show_token_usage: bool,
+    pub show_token_usage: bool,
 }
 
 impl Default for UserProfile {
@@ -83,7 +88,7 @@ impl Default for UserProfile {
     }
 }
 
-fn load_user_profile() -> UserProfile {
+pub fn load_user_profile() -> UserProfile {
     let home = std::env::var_os("USERPROFILE")
         .or_else(|| std::env::var_os("HOME"))
         .map(PathBuf::from)
@@ -108,7 +113,7 @@ fn load_user_profile() -> UserProfile {
     default_profile
 }
 
-fn save_user_profile(profile: &UserProfile) {
+pub fn save_user_profile(profile: &UserProfile) {
     let home = std::env::var_os("USERPROFILE")
         .or_else(|| std::env::var_os("HOME"))
         .map(PathBuf::from)
@@ -123,12 +128,70 @@ fn save_user_profile(profile: &UserProfile) {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SupportedLanguage {
+    English,
+    Indonesian,
+    Chinese,
+}
+
+impl SupportedLanguage {
+    pub fn from_str(s: &str) -> Self {
+        let lower = s.to_lowercase();
+        let trimmed = lower.trim();
+        if trimmed == "id"
+            || trimmed == "in"
+            || trimmed == "ina"
+            || trimmed == "ind"
+            || lower.contains("indo")
+            || lower.contains("bahasa")
+        {
+            SupportedLanguage::Indonesian
+        } else if trimmed == "zh"
+            || trimmed == "cn"
+            || trimmed == "zho"
+            || lower.contains("chin")
+            || lower.contains("中文")
+            || lower.contains("mandarin")
+        {
+            SupportedLanguage::Chinese
+        } else {
+            SupportedLanguage::English
+        }
+    }
+
+    pub fn display_name(&self) -> &'static str {
+        match self {
+            SupportedLanguage::English => "English",
+            SupportedLanguage::Indonesian => "Bahasa Indonesia",
+            SupportedLanguage::Chinese => "中文 (Chinese)",
+        }
+    }
+
+    pub fn directive(&self) -> &'static str {
+        match self {
+            SupportedLanguage::English => "\
+[Active Communication Language: English]
+- You MUST communicate, respond, reason, and explain exclusively in English.
+- Code comments, documentation, and technical explanations must be in clear English.",
+            SupportedLanguage::Indonesian => "\
+[Active Communication Language: Bahasa Indonesia]
+- Anda HARUS berkomunikasi, merespon, bernalar, dan memberikan penjelasan secara konsisten dalam Bahasa Indonesia.
+- Istilah teknis pemrograman standar (seperti fungsi, method, keyword) boleh dipertahankan bila relevan.",
+            SupportedLanguage::Chinese => "\
+[Active Communication Language: 中文 (Chinese)]
+- 你必须全程使用中文（简体中文）进行思考、推理、回复与解释。
+- 保证代码注释、架构说明以及与用户的沟通清晰、专业且通俗易懂。",
+        }
+    }
+}
+
 #[derive(Clone)]
-struct Skill {
-    id: &'static str,
-    name: &'static str,
-    description: &'static str,
-    system_prompt: &'static str,
+pub struct Skill {
+    pub id: &'static str,
+    pub name: &'static str,
+    pub description: &'static str,
+    pub system_prompt: &'static str,
 }
 
 fn get_available_skills() -> Vec<Skill> {
@@ -185,80 +248,26 @@ fn get_available_skills() -> Vec<Skill> {
 }
 
 #[derive(Clone, Debug)]
-struct ModelContextInfo {
-    context_window: u64,
-    max_output: Option<u64>,
-    note: &'static str,
+pub struct ModelContextInfo {
+    pub context_window: u64,
+    pub max_output: Option<u64>,
+    pub note: String,
 }
 
-fn get_model_context_info(model: &str) -> ModelContextInfo {
-    let lower = model.to_lowercase();
-    if lower.contains("claude-3-5-sonnet") || lower.contains("claude-3.5-sonnet") {
-        ModelContextInfo {
-            context_window: 200_000,
-            max_output: Some(8_192),
-            note: "Anthropic Claude 3.5 Sonnet (200k context)",
-        }
-    } else if lower.contains("gemini-1.5-pro") || lower.contains("gemini-2.0") || lower.contains("gemini-1.5-flash") {
-        ModelContextInfo {
-            context_window: 1_000_000,
-            max_output: Some(8_192),
-            note: "Google Gemini (1M context)",
-        }
-    } else if lower.contains("deepseek-reasoner") {
-        ModelContextInfo {
-            context_window: 64_000,
-            max_output: Some(8_192),
-            note: "DeepSeek R1 Reasoner (64k context)",
-        }
-    } else if lower.contains("deepseek-chat") || lower.contains("deepseek-v3") {
-        ModelContextInfo {
-            context_window: 64_000,
-            max_output: Some(8_192),
-            note: "DeepSeek V3 (64k context)",
-        }
-    } else if lower.contains("glm-5") || lower.contains("glm-4") {
-        ModelContextInfo {
-            context_window: 128_000,
-            max_output: Some(4_096),
-            note: "Zhipu / OpenAgentic GLM (128k context)",
-        }
-    } else if lower.contains("llama-3.3") || lower.contains("llama-3.1") {
-        ModelContextInfo {
-            context_window: 128_000,
-            max_output: Some(8_192),
-            note: "Meta Llama 3 (128k context)",
-        }
-    } else if lower.contains("qwen-2.5-coder") {
-        ModelContextInfo {
-            context_window: 128_000,
-            max_output: Some(8_192),
-            note: "Qwen 2.5 Coder (128k context)",
-        }
-    } else if lower.contains("gpt-4o-mini") || lower.contains("gpt-4o") {
-        ModelContextInfo {
-            context_window: 128_000,
-            max_output: Some(16_384),
-            note: "OpenAI GPT-4o (128k context, 16k output)",
-        }
-    } else if lower.contains("gpt-4-turbo") {
-        ModelContextInfo {
-            context_window: 128_000,
-            max_output: Some(4_096),
-            note: "OpenAI GPT-4 Turbo (128k context)",
-        }
-    } else if lower.contains("gpt-3.5-turbo") {
-        ModelContextInfo {
-            context_window: 16_385,
-            max_output: Some(4_096),
-            note: "OpenAI GPT-3.5 Turbo (16k context)",
-        }
-    } else {
-        ModelContextInfo {
-            context_window: 128_000,
-            max_output: None,
-            note: "Standard LLM (estimasi 128k context)",
-        }
+pub fn get_model_context_info(model: &str, provider: Option<&ProviderConfig>) -> ModelContextInfo {
+    let (cat_ctx, cat_out, cat_note) = resolve_model_limits(model);
+
+    let context_window = provider
+        .and_then(|p| p.context_window)
+        .unwrap_or(cat_ctx);
+    let max_output = provider
+        .and_then(|p| p.max_output_tokens)
+        .or(cat_out);
+
+    ModelContextInfo {
+        context_window,
+        max_output,
+        note: cat_note.to_string(),
     }
 }
 
@@ -402,8 +411,45 @@ fn format_number(n: u64) -> String {
     result
 }
 
-fn format_token_badge(usage: Option<&Usage>, model: &str) -> String {
-    let ctx_info = get_model_context_info(model);
+fn generate_progress_bar(pct: f64, width: usize) -> String {
+    let filled = ((pct / 100.0) * width as f64).round() as usize;
+    let filled = filled.min(width);
+    let empty = width.saturating_sub(filled);
+    format!("{}{}", "▰".repeat(filled), "▱".repeat(empty))
+}
+
+fn textwrap_simple(text: &str, max_len: usize) -> Vec<String> {
+    let mut lines = Vec::new();
+    let mut current = String::new();
+    for word in text.split_whitespace() {
+        if current.is_empty() {
+            current.push_str(word);
+        } else if current.len() + 1 + word.len() <= max_len {
+            current.push(' ');
+            current.push_str(word);
+        } else {
+            lines.push(current);
+            current = word.to_string();
+        }
+    }
+    if !current.is_empty() {
+        lines.push(current);
+    }
+    lines
+}
+
+fn configure_inquire_theme() {
+    let mut config = RenderConfig::default();
+    config.prompt_prefix = Styled::new("❯ ").with_fg(Color::LightCyan);
+    config.answered_prompt_prefix = Styled::new("✔ ").with_fg(Color::LightGreen);
+    config.highlighted_option_prefix = Styled::new("● ").with_fg(Color::LightCyan);
+    config.scroll_up_prefix = Styled::new("▲");
+    config.scroll_down_prefix = Styled::new("▼");
+    inquire::set_global_render_config(config);
+}
+
+fn format_token_badge(usage: Option<&Usage>, model: &str, provider: Option<&ProviderConfig>) -> String {
+    let ctx_info = get_model_context_info(model, provider);
     if let Some(u) = usage {
         let p = u.prompt_tokens.unwrap_or(0);
         let c = u.completion_tokens.unwrap_or(0);
@@ -413,6 +459,14 @@ fn format_token_badge(usage: Option<&Usage>, model: &str) -> String {
         } else {
             0.0
         };
+        let bar = generate_progress_bar(pct, 10);
+        let bar_color = if pct > 85.0 {
+            "\x1B[31m"
+        } else if pct > 60.0 {
+            "\x1B[33m"
+        } else {
+            "\x1B[32m"
+        };
         let ctx_label = if ctx_info.context_window >= 1_000_000 {
             format!("{}M", ctx_info.context_window / 1_000_000)
         } else if ctx_info.context_window >= 1_000 {
@@ -421,7 +475,7 @@ fn format_token_badge(usage: Option<&Usage>, model: &str) -> String {
             format!("{}", ctx_info.context_window)
         };
         format!(
-            "📊 [Tokens: {} in + {} out = {} total | Context: {:.2}% of {}]",
+            "\x1B[90m─── \x1B[36mTokens:\x1B[0m \x1B[37m{}\x1B[0m \x1B[90min\x1B[0m \x1B[90m+\x1B[0m \x1B[37m{}\x1B[0m \x1B[90mout\x1B[0m \x1B[90m(\x1B[1;36m{}\x1B[0m\x1B[90m)\x1B[0m \x1B[90m•\x1B[0m \x1B[36mCtx:\x1B[0m {bar_color}[{bar}]\x1B[0m \x1B[37m{:.1}%\x1B[0m \x1B[90mof {}\x1B[0m",
             format_number(p),
             format_number(c),
             format_number(t),
@@ -430,26 +484,23 @@ fn format_token_badge(usage: Option<&Usage>, model: &str) -> String {
         )
     } else {
         format!(
-            "📊 [Model: {} | Context Window: {}]",
+            "\x1B[90m─── \x1B[36mModel:\x1B[0m \x1B[37m{}\x1B[0m \x1B[90m•\x1B[0m \x1B[36mContext Window:\x1B[0m \x1B[37m{}\x1B[0m",
             model, ctx_info.note
         )
     }
 }
 
-fn print_token_stats(tracker: &SessionTokenTracker, current_model: &str, show_badge: bool) {
-    let ctx_info = get_model_context_info(current_model);
-    println!("\n══════════════════════════════════════════════════════════════");
-    println!(" 📊 Token Usage & Context Window Statistics");
-    println!("══════════════════════════════════════════════════════════════");
-    println!(" 🤖 Model Context Window:");
-    println!("  • Active Model     : {}", current_model);
-    println!("  • Profile/Family   : {}", ctx_info.note);
-    println!("  • Context Capacity : {} tokens", format_number(ctx_info.context_window));
+fn print_token_stats(tracker: &SessionTokenTracker, current_model: &str, provider: Option<&ProviderConfig>, show_badge: bool) {
+    let ctx_info = get_model_context_info(current_model, provider);
+    println!("\n\x1B[1;36m╭─ 📊 Token Usage & Context Metrics ─────────────────────────────╮\x1B[0m");
+    println!("  \x1B[1;33mActive Model Configuration\x1B[0m");
+    println!("    \x1B[90mModel        :\x1B[0m \x1B[1;37m{}\x1B[0m", current_model);
+    println!("    \x1B[90mFamily / Note:\x1B[0m \x1B[37m{}\x1B[0m", ctx_info.note);
+    println!("    \x1B[90mContext Limit:\x1B[0m \x1B[36m{} tokens\x1B[0m", format_number(ctx_info.context_window));
     if let Some(max_out) = ctx_info.max_output {
-        println!("  • Max Output Limit : {} tokens", format_number(max_out));
+        println!("    \x1B[90mMax Output   :\x1B[0m \x1B[36m{} tokens\x1B[0m", format_number(max_out));
     }
-
-    println!("\n ⏱️ Last Query Usage:");
+    println!("  \x1B[1;33mLast Interaction\x1B[0m");
     if let Some(last_u) = &tracker.last_usage {
         let p = last_u.prompt_tokens.unwrap_or(0);
         let c = last_u.completion_tokens.unwrap_or(0);
@@ -459,25 +510,29 @@ fn print_token_stats(tracker: &SessionTokenTracker, current_model: &str, show_ba
         } else {
             0.0
         };
+        let bar = generate_progress_bar(pct, 10);
+        let bar_color = if pct > 85.0 { "\x1B[31m" } else if pct > 60.0 { "\x1B[33m" } else { "\x1B[32m" };
         let remaining = ctx_info.context_window.saturating_sub(p);
-        println!("  • Prompt (Input)   : {} tokens ({:.2}% context window terpakai)", format_number(p), pct);
-        println!("  • Completion (Out) : {} tokens", format_number(c));
-        println!("  • Total Last Query : {} tokens", format_number(t));
-        println!("  • Sisa Ruang Bebas : {} tokens", format_number(remaining));
+        println!("    \x1B[90mPrompt In    :\x1B[0m \x1B[37m{} tokens\x1B[0m", format_number(p));
+        println!("    \x1B[90mCompletion   :\x1B[0m \x1B[37m{} tokens\x1B[0m", format_number(c));
+        println!("    \x1B[90mTotal Query  :\x1B[0m \x1B[1;36m{} tokens\x1B[0m", format_number(t));
+        println!("    \x1B[90mContext Bar  :\x1B[0m {bar_color}[{bar}]\x1B[0m \x1B[37m{:.2}%\x1B[0m \x1B[90m({} free)\x1B[0m", pct, format_number(remaining));
     } else {
-        println!("  • Belum ada query yang dieksekusi di sesi ini.");
+        println!("    \x1B[90m(Belum ada query yang dieksekusi di sesi ini)\x1B[0m");
     }
-
-    println!("\n 📈 Cumulative Session Usage:");
-    println!("  • Total Queries    : {}", tracker.query_count);
-    println!("  • Total Prompt     : {} tokens", format_number(tracker.total_prompt_tokens));
-    println!("  • Total Completion : {} tokens", format_number(tracker.total_completion_tokens));
-    println!("  • Grand Total      : {} tokens", format_number(tracker.total_tokens));
-    println!("  • Auto-badge Footer: {}", if show_badge { "Aktif (ganti: `/tokens toggle`)" } else { "Nonaktif (ganti: `/tokens toggle`)" });
-    println!("══════════════════════════════════════════════════════════════\n");
+    println!("  \x1B[1;33mSession Accumulation\x1B[0m");
+    println!("    \x1B[90mTotal Queries:\x1B[0m \x1B[37m{}\x1B[0m", tracker.query_count);
+    println!("    \x1B[90mTotal Prompt :\x1B[0m \x1B[37m{} tokens\x1B[0m", format_number(tracker.total_prompt_tokens));
+    println!("    \x1B[90mTotal Output :\x1B[0m \x1B[37m{} tokens\x1B[0m", format_number(tracker.total_completion_tokens));
+    println!("    \x1B[90mGrand Total  :\x1B[0m \x1B[1;32m{} tokens\x1B[0m", format_number(tracker.total_tokens));
+    println!("    \x1B[90mAuto-badge   :\x1B[0m {}", if show_badge { "\x1B[32mAktif\x1B[0m \x1B[90m(/tokens toggle)\x1B[0m" } else { "\x1B[90mNonaktif (/tokens toggle)\x1B[0m" });
+    println!("\x1B[1;36m╰─────────────────────────────────────────────────────────────────╯\x1B[0m\n");
 }
 
-fn build_system_prompt(active_skill: Option<&Skill>, user_profile: &UserProfile) -> String {
+pub fn build_system_prompt(active_skill: Option<&Skill>, user_profile: &UserProfile) -> String {
+    let lang = SupportedLanguage::from_str(&user_profile.response_language);
+    let lang_directive = lang.directive();
+
     let base_identity = "\
 Identity and context:
 - You are ctrl-cli, an ultra-lightweight, high-performance autonomous coding agent CLI.
@@ -505,15 +560,145 @@ Identity and context:
         String::new()
     };
 
-    format!("{}\n\n{}{}{}", base_identity, skill_part, profile_part, memory_part)
+    format!("{}\n\n{}\n\n{}{}{}", base_identity, lang_directive, skill_part, profile_part, memory_part)
+}
+
+/// Canonical command definition and its recognized aliases.
+#[derive(Clone, Copy)]
+pub struct CommandSpec {
+    pub primary: &'static str,
+    pub aliases: &'static [&'static str],
+    pub description: &'static str,
+}
+
+pub const COMMAND_SPECS: &[CommandSpec] = &[
+    CommandSpec { primary: "/help", aliases: &["?", "/?", "help"], description: "Bantuan & panduan lengkap semua perintah" },
+    CommandSpec { primary: "/model", aliases: &["/models"], description: "Pilih / ganti model AI aktif (GLM, Claude, GPT, dll.)" },
+    CommandSpec { primary: "/skill", aliases: &["/skills"], description: "Pilih peran spesialis AI (Rust Expert, Reviewer, Web UI)" },
+    CommandSpec { primary: "/lang", aliases: &["/language"], description: "Ganti bahasa respon (English, Bahasa Indonesia, 中文)" },
+    CommandSpec { primary: "/provider", aliases: &["/providers"], description: "Kelola endpoint & API key provider AI (list, switch, add)" },
+    CommandSpec { primary: "/probe", aliases: &["/check-model"], description: "Auto-test koneksi, API key & deteksi context limits model" },
+    CommandSpec { primary: "/permissions", aliases: &["/security"], description: "Atur izin eksekusi tool (Ask / AutoApprove / ReadOnly)" },
+    CommandSpec { primary: "/stream", aliases: &[], description: "Toggle streaming respons real-time SSE (on / off)" },
+    CommandSpec { primary: "/tools", aliases: &[], description: "Lihat daftar 14 built-in agent tools" },
+    CommandSpec { primary: "/undo", aliases: &[], description: "Batalkan (rollback) modifikasi berkas dari checkpoint" },
+    CommandSpec { primary: "/diff", aliases: &[], description: "Lihat unified diff perubahan berkas / status git terkini" },
+    CommandSpec { primary: "/check", aliases: &[], description: "Jalankan diagnosa syntax / compiler (self-healing loop)" },
+    CommandSpec { primary: "/compact", aliases: &[], description: "Ringkas riwayat percakapan lama hemat context window" },
+    CommandSpec { primary: "/mcp", aliases: &[], description: "Info server Model Context Protocol (.ctrl/mcp.json)" },
+    CommandSpec { primary: "/memory", aliases: &[], description: "Lihat catatan memori proyek (.ctrl/MEMORY.md)" },
+    CommandSpec { primary: "/checkpoints", aliases: &[], description: "Lihat riwayat snapshot modifikasi berkas" },
+    CommandSpec { primary: "/tokens", aliases: &["/usage", "/context"], description: "Cek statistik token & progress bar context window" },
+    CommandSpec { primary: "/save", aliases: &["/write"], description: "Simpan kode respon terakhir langsung ke file" },
+    CommandSpec { primary: "/reset", aliases: &["/clear-history"], description: "Kosongkan riwayat percakapan (mulai sesi baru)" },
+    CommandSpec { primary: "/profile", aliases: &[], description: "Lihat Developer Profile & preferensi bahasa" },
+    CommandSpec { primary: "/dev", aliases: &["/developer", "/author", "/about"], description: "Info pengembang & arsitektur proyek (galangfjr)" },
+    CommandSpec { primary: "/info", aliases: &["/config"], description: "Ringkasan konfigurasi endpoint, provider & model" },
+    CommandSpec { primary: "/clear", aliases: &[], description: "Bersihkan layar terminal" },
+    CommandSpec { primary: "/tasks", aliases: &[], description: "Kelola background tasks (list, view, cancel, wait, logs, clear)" },
+    CommandSpec { primary: "/exit", aliases: &["/quit"], description: "Keluar dari aplikasi ctrl-cli" },
+];
+
+/// Resolves user slash input with prefix auto-expansion & autocorrect (e.g. /comp -> /compact, ? -> /help).
+pub fn resolve_slash_command(input: &str) -> (String, Option<String>) {
+    let raw_trimmed = input.trim();
+    if raw_trimmed.is_empty() {
+        return (String::new(), None);
+    }
+
+    // Strip trailing descriptions if input was autocompleted with description (e.g. "/compact — ...")
+    let trimmed = if let Some((cmd_part, _)) = raw_trimmed.split_once(" — ") {
+        cmd_part.trim()
+    } else if let Some((cmd_part, _)) = raw_trimmed.split_once(" - ") {
+        cmd_part.trim()
+    } else {
+        raw_trimmed
+    };
+
+    // Direct help shortcuts: ?, /?, help
+    if trimmed == "?" || trimmed == "/?" || trimmed.eq_ignore_ascii_case("help") {
+        return ("/help".to_string(), None);
+    }
+
+    // If query starts with "? " or "/? "
+    if trimmed.starts_with("? ") || trimmed.starts_with("/? ") {
+        let after = if trimmed.starts_with("? ") { &trimmed[2..] } else { &trimmed[3..] }.trim();
+        let target_cmd = if after.starts_with('/') {
+            after.to_string()
+        } else {
+            format!("/{}", after)
+        };
+        let (resolved, _) = resolve_slash_command(&target_cmd);
+        return (format!("/help {}", resolved), None);
+    }
+
+    if !trimmed.starts_with('/') {
+        return (trimmed.to_string(), None);
+    }
+
+    let parts: Vec<&str> = trimmed.split_whitespace().collect();
+    if parts.is_empty() {
+        return (String::new(), None);
+    }
+    let cmd = parts[0].to_lowercase();
+    let rest = if parts.len() > 1 {
+        format!(" {}", parts[1..].join(" "))
+    } else {
+        String::new()
+    };
+
+    // 1. Exact match check against all primary commands and aliases
+    for spec in COMMAND_SPECS {
+        if spec.primary == cmd || spec.aliases.iter().any(|&a| a == cmd) {
+            return (trimmed.to_string(), None);
+        }
+    }
+
+    // 2. Prefix match: find all unique primary commands whose primary or aliases start with `cmd`
+    let mut matching_primaries: Vec<&'static str> = Vec::new();
+    for spec in COMMAND_SPECS {
+        let matches_primary = spec.primary.starts_with(&cmd);
+        let matches_alias = spec.aliases.iter().any(|&a| a.starts_with(&cmd));
+        if matches_primary || matches_alias {
+            if !matching_primaries.contains(&spec.primary) {
+                matching_primaries.push(spec.primary);
+            }
+        }
+    }
+
+    if matching_primaries.len() == 1 {
+        let expanded = matching_primaries[0];
+        let note = format!("⚡ Auto-corrected '{}' -> '{}'", cmd, expanded);
+        (format!("{}{}", expanded, rest), Some(note))
+    } else if matching_primaries.is_empty() {
+        (trimmed.to_string(), None)
+    } else {
+        // Ambiguous prefix across distinct primary commands
+        let note = format!(
+            "⚡ Ambiguous command prefix '{}'. Suggestions: {}",
+            cmd,
+            matching_primaries.join(", ")
+        );
+        (trimmed.to_string(), Some(note))
+    }
 }
 
 #[derive(Clone, Default)]
-struct SlashCompleter;
+pub struct SlashCompleter;
 
 impl Autocomplete for SlashCompleter {
     fn get_suggestions(&mut self, input: &str) -> Result<Vec<String>, CustomUserError> {
         let mut suggestions = Vec::new();
+        let trimmed = input.trim();
+
+        if trimmed == "?" || trimmed == "/?" || trimmed.starts_with("? ") || trimmed.starts_with("/? ") {
+            suggestions.push("/help".to_string());
+            suggestions.push("? /compact".to_string());
+            suggestions.push("? /provider".to_string());
+            suggestions.push("? /lang".to_string());
+            return Ok(suggestions);
+        }
+
         if input.starts_with("/model ") {
             let prefix = &input["/model ".len()..];
             let models = [
@@ -521,11 +706,12 @@ impl Autocomplete for SlashCompleter {
                 "glm-4-plus",
                 "deepseek-chat",
                 "deepseek-reasoner",
+                "claude-3-5-sonnet-20241022",
+                "claude-3-7-sonnet",
                 "llama-3.3-70b-versatile",
                 "qwen-2.5-coder-32b",
                 "gpt-4o-mini",
                 "gpt-4o",
-                "anthropic/claude-3.5-sonnet",
             ];
             for m in models {
                 if m.to_lowercase().starts_with(&prefix.to_lowercase()) {
@@ -541,30 +727,74 @@ impl Autocomplete for SlashCompleter {
                     suggestions.push(format!("/skill {}", id));
                 }
             }
+        } else if input.starts_with("/lang ") || input.starts_with("/language ") {
+            let prefix = if input.starts_with("/lang ") {
+                &input["/lang ".len()..]
+            } else {
+                &input["/language ".len()..]
+            };
+            let langs = ["en (English)", "id (Bahasa Indonesia)", "zh (中文)"];
+            for l in langs {
+                if l.to_lowercase().starts_with(&prefix.to_lowercase()) {
+                    let code = l.split_whitespace().next().unwrap_or("en");
+                    suggestions.push(format!("/lang {}", code));
+                }
+            }
+        } else if input.starts_with("/provider ") || input.starts_with("/providers ") {
+            let prefix = if input.starts_with("/provider ") {
+                &input["/provider ".len()..]
+            } else {
+                &input["/providers ".len()..]
+            };
+            let subs = ["list", "switch", "add", "delete", "probe"];
+            for s in subs {
+                if s.starts_with(&prefix.to_lowercase()) {
+                    suggestions.push(format!("/provider {}", s));
+                }
+            }
+        } else if input.starts_with("/tokens ") {
+            let prefix = &input["/tokens ".len()..];
+            let subs = ["toggle", "on", "off"];
+            for s in subs {
+                if s.starts_with(&prefix.to_lowercase()) {
+                    suggestions.push(format!("/tokens {}", s));
+                }
+            }
+        } else if input.starts_with("/tasks ") {
+            let prefix = &input["/tasks ".len()..];
+            let subs = ["list", "view", "cancel", "wait", "logs", "clear"];
+            for s in subs {
+                if s.starts_with(&prefix.to_lowercase()) {
+                    suggestions.push(format!("/tasks {}", s));
+                }
+            }
         } else if input.starts_with('/') {
-            let commands = [
-                "/tools",
-                "/permissions",
-                "/memory",
-                "/tokens",
-                "/tokens toggle",
-                "/usage",
-                "/context",
-                "/reset",
-                "/save",
-                "/write",
-                "/model",
-                "/skill",
-                "/dev",
-                "/profile",
-                "/info",
-                "/clear",
-                "/help",
-                "/exit",
+            let lower_input = input.to_lowercase();
+            let subcommands = [
+                ("/provider list", "Tampilkan tabel semua provider terkonfigurasi"),
+                ("/provider switch", "Beralih ke provider tertentu"),
+                ("/provider add", "Tambah konfigurasi provider / custom endpoint baru"),
+                ("/provider delete", "Hapus konfigurasi provider"),
+                ("/provider probe", "Uji konektivitas & context limits provider"),
+                ("/tokens toggle", "Aktifkan / nonaktifkan badge token otomatis"),
+                ("/stream toggle", "Toggle on/off streaming SSE"),
+                ("/lang en", "Switch response language to English"),
+                ("/lang id", "Ganti bahasa respon ke Bahasa Indonesia"),
+                ("/lang zh", "切换回复语言为中文 (Chinese)"),
             ];
-            for cmd in commands {
-                if cmd.starts_with(input) {
-                    suggestions.push(cmd.to_string());
+            for (sc, desc) in subcommands {
+                if sc.starts_with(&lower_input) {
+                    suggestions.push(format!("{:<17} — {}", sc, desc));
+                }
+            }
+            for spec in COMMAND_SPECS {
+                let matches_primary = spec.primary.starts_with(&lower_input);
+                let matches_alias = spec.aliases.iter().any(|&a| a.starts_with('/') && a.starts_with(&lower_input));
+                if matches_primary || matches_alias {
+                    let formatted = format!("{:<17} — {}", spec.primary, spec.description);
+                    if !suggestions.iter().any(|s| s.starts_with(spec.primary)) {
+                        suggestions.push(formatted);
+                    }
                 }
             }
         }
@@ -573,16 +803,54 @@ impl Autocomplete for SlashCompleter {
 
     fn get_completion(
         &mut self,
-        _input: &str,
+        input: &str,
         highlighted_suggestion: Option<String>,
     ) -> Result<Replacement, CustomUserError> {
-        Ok(Replacement::Some(highlighted_suggestion.unwrap_or_default()))
+        if let Some(h) = highlighted_suggestion {
+            let clean = if let Some((cmd, _)) = h.split_once(" — ") {
+                cmd.trim().to_string()
+            } else if let Some((cmd, _)) = h.split_once(" - ") {
+                cmd.trim().to_string()
+            } else {
+                h.split_whitespace().next().unwrap_or(&h).to_string()
+            };
+            return Ok(Replacement::Some(clean));
+        }
+
+        if let Ok(suggestions) = self.get_suggestions(input) {
+            let clean_suggestions: Vec<String> = suggestions.iter().map(|s| {
+                if let Some((cmd, _)) = s.split_once(" — ") {
+                    cmd.trim().to_string()
+                } else if let Some((cmd, _)) = s.split_once(" - ") {
+                    cmd.trim().to_string()
+                } else {
+                    s.split_whitespace().next().unwrap_or(s).to_string()
+                }
+            }).collect();
+
+            if clean_suggestions.len() == 1 {
+                return Ok(Replacement::Some(clean_suggestions[0].clone()));
+            } else if let Some(first) = clean_suggestions.first() {
+                let common = clean_suggestions.iter().fold(first.clone(), |acc, item| {
+                    acc.chars()
+                        .zip(item.chars())
+                        .take_while(|(a, b)| a == b)
+                        .map(|(a, _)| a)
+                        .collect()
+                });
+                if common.len() > input.len() {
+                    return Ok(Replacement::Some(common));
+                }
+            }
+        }
+        Ok(Replacement::None)
     }
 }
 
 fn main() -> Result<()> {
     load_env_file();
     let mut profile = load_user_profile();
+    let mut providers_reg = load_providers_registry();
     let cli = Cli::parse();
 
     match cli.command {
@@ -593,10 +861,10 @@ fn main() -> Result<()> {
                     .into_iter()
                     .find(|s| s.id.eq_ignore_ascii_case(&s_name))
             });
-            handle_generate(&full_prompt, model.as_deref(), skill_obj.as_ref(), &profile, tokens, output.as_deref())?;
+            handle_generate(&full_prompt, model.as_deref(), skill_obj.as_ref(), &profile, &providers_reg, tokens, output.as_deref())?;
         }
         None => {
-            start_repl(&mut profile)?;
+            start_repl(&mut profile, &mut providers_reg)?;
         }
     }
     Ok(())
@@ -638,33 +906,17 @@ fn load_env_file() {
     }
 }
 
-fn get_config() -> Result<(String, String, String)> {
-    let api_key = std::env::var("AI_API_KEY").unwrap_or_default();
-    if api_key.is_empty() || api_key == "your_api_key_here" {
-        anyhow::bail!(
-            "AI_API_KEY is not set!\n\
-             Please add your API key in either:\n  \
-             • File: C:\\Users\\Administrator\\code-agent-rust\\ctrl-cli\\.env\n  \
-             • Terminal: $env:AI_API_KEY=\"your_api_key_here\""
-        );
-    }
-    let base_url = std::env::var("AI_BASE_URL")
-        .unwrap_or_else(|_| "https://api.openai.com/v1".to_string());
-    let model = std::env::var("AI_MODEL")
-        .unwrap_or_else(|_| "gpt-4o-mini".to_string());
-    Ok((api_key, base_url, model))
-}
-
 fn handle_generate(
     prompt: &str,
     model_override: Option<&str>,
     active_skill: Option<&Skill>,
     user_profile: &UserProfile,
+    providers_reg: &ProvidersRegistry,
     show_tokens: bool,
     output_file: Option<&str>,
 ) -> Result<()> {
-    let (api_key, base_url, default_model) = get_config()?;
-    let model = model_override.unwrap_or(&default_model);
+    let active_prov = providers_reg.get_active_provider();
+    let model = model_override.unwrap_or(&active_prov.default_model);
     let system_prompt = build_system_prompt(active_skill, user_profile);
 
     let mut conversation = Vec::new();
@@ -672,15 +924,21 @@ fn handle_generate(
         mode: PermissionMode::AutoApprove,
     };
 
+    let stream_output = output_file.is_none();
     let result = run_agent_loop(
         prompt,
         &mut conversation,
         model,
-        &api_key,
-        &base_url,
+        &active_prov.api_key,
+        &active_prov.base_url,
+        active_prov.protocol,
         &mut permission_gate,
         &system_prompt,
         25,
+        stream_output,
+        active_prov.context_window,
+        None,
+        None,
     )?;
 
     if let Some(dest) = output_file {
@@ -692,14 +950,16 @@ fn handle_generate(
             }
         }
     } else {
-        println!("{}", result.final_content);
+        if !stream_output {
+            println!("{}", result.final_content);
+        }
         if let Some(note) = auto_save_if_code_generated(prompt, &result.final_content, result.tools_executed) {
             println!("{}", note);
         }
     }
 
     if show_tokens {
-        println!("\n{}", format_token_badge(Some(&result.total_usage), model));
+        println!("\n{}", format_token_badge(Some(&result.total_usage), model, Some(active_prov)));
     }
     Ok(())
 }
@@ -709,33 +969,53 @@ fn handle_slash_command(
     current_model: &mut String,
     active_skill: &mut Option<Skill>,
     user_profile: &mut UserProfile,
-    base_url: &str,
+    providers_reg: &mut ProvidersRegistry,
     tracker: &SessionTokenTracker,
     permission_gate: &mut PermissionGate,
     conversation: &mut Vec<ChatMessage>,
+    streaming: &mut bool,
 ) -> bool {
     let trimmed = input.trim();
     if trimmed == "/" {
         let options = vec![
-            "/tools       - Daftar built-in agent tools (read, write, edit, shell, dll.)",
-            "/permissions - Pengaturan izin keamanan (Ask / AutoApprove / ReadOnly)",
-            "/memory      - Lihat catatan memori proyek (.ctrl/MEMORY.md)",
-            "/reset       - Reset riwayat percakapan & memori sesi (mulai konteks baru)",
-            "/tokens      - Cek statistik token & context window",
-            "/save        - Simpan kode respon terakhir ke file",
-            "/model       - Ganti model AI aktif (pilih dari daftar)",
-            "/skill       - Pilih / ganti Skill spesialis AI",
-            "/dev         - Tentang pembuat / pengembang (galangfjr)",
-            "/profile     - Lihat Developer Profile aktif",
-            "/info        - Cek konfigurasi endpoint, context & model",
-            "/clear       - Bersihkan layar terminal",
-            "/help        - Tampilkan bantuan perintah",
-            "/exit        - Keluar dari REPL",
+            "─── 🤖 Model & Agent Persona ─────────────────────────────────",
+            "🤖 /model        • Pilih model AI aktif (GLM-5.3-Flash, Claude, DeepSeek)",
+            "🧠 /skill        • Pilih peran spesialis (Rust Expert, Reviewer, Web UI)",
+            "🌐 /lang         • Ganti bahasa respon (English, Bahasa Indonesia, 中文)",
+            "🔌 /provider     • Kelola multi-provider (OpenAI, Anthropic, Ollama, Costum)",
+            "🩺 /probe        • Auto-test koneksi, API key & deteksi context limits",
+            "🛡️  /permissions  • Pengaturan izin keamanan (Ask / AutoApprove / ReadOnly)",
+            "⚡ /stream       • Toggle streaming respons real-time SSE (on / off)",
+            "─── 🛠️  Workspace & Checkpoint Engine ──────────────────────────",
+            "🛠️  /tools        • Lihat 14 built-in agent tools (read, write, web, shell)",
+            "🔄 /undo         • Batalkan (rollback) modifikasi berkas dari checkpoint",
+            "🔍 /diff         • Lihat unified diff perubahan berkas / status git",
+            "🩺 /check        • Self-healing diagnosa compiler & syntax error",
+            "📦 /compact      • Kompaksi riwayat percakapan lama hemat context",
+            "🔌 /mcp          • Status server Model Context Protocol (.ctrl/mcp.json)",
+            "💾 /memory       • Catatan memori proyek (.ctrl/MEMORY.md)",
+            "🕒 /checkpoints  • Riwayat snapshot modifikasi berkas",
+            "─── 📊 Session & Utilities ───────────────────────────────────",
+            "📊 /tokens       • Cek statistik token & progress bar context window",
+            "📝 /save         • Simpan kode respon terakhir langsung ke file",
+            "🧹 /reset        • Kosongkan riwayat percakapan (mulai sesi baru)",
+            "👤 /profile      • Developer Profile & preferensi bahasa",
+            "💻 /dev          • Info pengembang & arsitektur proyek",
+            "ℹ️  /info         • Ringkasan konfigurasi endpoint & model",
+            "✨ /clear        • Bersihkan layar terminal",
+            "❓ /help         • Bantuan lengkap semua perintah",
+            "🚪 /exit         • Keluar dari ctrl-cli",
         ];
-        match Select::new("Pilih perintah [/]:", options).prompt() {
+        match Select::new("Pilih perintah [/] — Menu Navigasi & Penjelasan Fitur (Gunakan panah ↑/↓, Enter untuk memilih):", options).prompt() {
             Ok(choice) => {
-                let cmd = choice.split_whitespace().next().unwrap_or("");
-                return handle_slash_command(cmd, current_model, active_skill, user_profile, base_url, tracker, permission_gate, conversation);
+                if choice.starts_with("───") {
+                    return true;
+                }
+                let cmd = choice.split_whitespace().find(|p| p.starts_with('/')).unwrap_or("");
+                if !cmd.is_empty() {
+                    return handle_slash_command(cmd, current_model, active_skill, user_profile, providers_reg, tracker, permission_gate, conversation, streaming);
+                }
+                return true;
             }
             _ => return true,
         }
@@ -745,48 +1025,308 @@ fn handle_slash_command(
     let cmd = parts[0].to_lowercase();
 
     match cmd.as_str() {
-        "/help" => {
-            println!("\nAvailable Slash Commands:");
-            println!("  /                   - Buka menu interaktif (panah ↑/↓)");
-            println!("  /tools              - Lihat daftar built-in tools yang bisa dipanggil agent");
-            println!("  /permissions        - Atur kebijakan izin tool (Ask / AutoApprove / ReadOnly)");
-            println!("  /memory             - Lihat catatan memori proyek (.ctrl/MEMORY.md)");
-            println!("  /reset              - Kosongkan riwayat percakapan & memori sesi (fresh start)");
-            println!("  /tokens, /usage     - Cek penggunaan token & limit context window");
-            println!("  /tokens toggle      - Aktifkan/nonaktifkan badge token otomatis");
-            println!("  /save [nama_file]   - Simpan kode respon terakhir langsung ke file");
-            println!("  /model              - Pilih model dari menu daftar (panah ↑/↓)");
-            println!("  /model <name>       - Ganti langsung ke model tertentu");
-            println!("  /skill              - Lihat daftar & pilih skill spesialis (panah ↑/↓)");
-            println!("  /skill <name>       - Aktifkan skill tertentu (misal: /skill rust-expert)");
-            println!("  /skill reset        - Nonaktifkan skill (kembali ke General Assistant)");
-            println!("  /dev                - Info pembuat / pengembang aplikasi ({})", user_profile.name);
-            println!("  /profile            - Lihat Developer Profile Anda ({})", user_profile.name);
-            println!("  /info, /config      - Tampilkan endpoint & konfigurasi sesi");
-            println!("  /clear              - Bersihkan layar");
-            println!("  /exit, /quit        - Keluar dari REPL");
-            println!("  /help               - Bantuan ini\n");
+        "/help" | "?" => {
+            println!("\n\x1B[1;36m╭─ ❓ ctrl-cli Available Slash Commands ─────────────────────────────────╮\x1B[0m");
+            println!("  \x1B[1;33mModel & Persona\x1B[0m");
+            println!("    \x1B[1;36m/model\x1B[0m \x1B[90m[nama]\x1B[0m       Pilih model AI aktif (GLM-5.3-Flash, Claude, dll)");
+            println!("    \x1B[1;36m/skill\x1B[0m \x1B[90m[id|reset]\x1B[0m   Aktifkan peran spesialis (rust-expert, web, dll)");
+            println!("    \x1B[1;36m/lang\x1B[0m  \x1B[90m[en|id|zh]\x1B[0m   Ganti bahasa respon (English, Indonesia, 中文)");
+            println!("    \x1B[1;36m/provider\x1B[0m           Kelola provider API (list, switch, add, delete)");
+            println!("    \x1B[1;36m/probe\x1B[0m              Uji koneksi, API key & batas context model");
+            println!("    \x1B[1;36m/stream\x1B[0m \x1B[90m[on|off]\x1B[0m    Toggle streaming respons real-time (SSE)");
+            println!("    \x1B[1;36m/permissions\x1B[0m        Atur mode izin tool (Ask / AutoApprove / ReadOnly)");
+            println!("  \x1B[1;33mWorkspace & Tools\x1B[0m");
+            println!("    \x1B[1;36m/tools\x1B[0m              Lihat 14 built-in agent tools");
+            println!("    \x1B[1;36m/undo\x1B[0m               Rollback perubahan file terakhir dari checkpoint");
+            println!("    \x1B[1;36m/diff\x1B[0m \x1B[90m[file]\x1B[0m        Lihat perbedaan (diff) perubahan file terkini");
+            println!("    \x1B[1;36m/check\x1B[0m \x1B[90m[file]\x1B[0m       Jalankan compiler check (self-healing loop)");
+            println!("    \x1B[1;36m/compact\x1B[0m            Ringkas riwayat sesi agar hemat context window");
+            println!("    \x1B[1;36m/mcp\x1B[0m                Status koneksi Model Context Protocol");
+            println!("    \x1B[1;36m/memory\x1B[0m             Lihat isi memori proyek (.ctrl/MEMORY.md)");
+            println!("    \x1B[1;36m/checkpoints\x1B[0m        Lihat riwayat snapshot modifikasi file");
+            println!("    \x1B[1;36m/tasks\x1B[0m \x1B[90m[sub]\x1B[0m        Kelola background tasks (list/view/cancel/wait/logs/clear)");
+            println!("  \x1B[1;33mSession & Utilities\x1B[0m");
+            println!("    \x1B[1;36m/\x1B[0m                   Buka menu interaktif (panah ↑/↓)");
+            println!("    \x1B[1;36m/tokens\x1B[0m \x1B[90m[toggle]\x1B[0m    Lihat statistik token & grafik context");
+            println!("    \x1B[1;36m/save\x1B[0m \x1B[90m[nama_file]\x1B[0m   Simpan hasil kode terakhir langsung ke file");
+            println!("    \x1B[1;36m/reset\x1B[0m              Kosongkan riwayat percakapan (sesi baru)");
+            println!("    \x1B[1;36m/profile\x1B[0m            Lihat & edit profil developer / preferensi");
+            println!("    \x1B[1;36m/info\x1B[0m               Cek konfigurasi endpoint, provider & model");
+            println!("    \x1B[1;36m/clear\x1B[0m              Bersihkan layar terminal");
+            println!("    \x1B[1;36m/exit\x1B[0m               Keluar dari ctrl-cli");
+            println!("\x1B[1;36m╰────────────────────────────────────────────────────────────────────────╯\x1B[0m");
+            println!("  \x1B[90m💡 Tip: Mendukung shortcut cepat: /comp, /und, /prov, /tok\x1B[0m\n");
+            true
+        }
+        "/lang" | "/language" => {
+            if parts.len() > 1 {
+                let target = parts[1].to_lowercase();
+                let chosen = SupportedLanguage::from_str(&target);
+                user_profile.response_language = chosen.display_name().to_string();
+                save_user_profile(user_profile);
+                match chosen {
+                    SupportedLanguage::English => {
+                        println!("\n✔ Active response language set to: English (System prompt & assistant reasoning updated).\n");
+                    }
+                    SupportedLanguage::Indonesian => {
+                        println!("\n✔ Bahasa respon aktif disetel ke: Bahasa Indonesia (System prompt & penalaran asisten diperbarui).\n");
+                    }
+                    SupportedLanguage::Chinese => {
+                        println!("\n✔ 当前回复语言已设置为：中文（简体中文）（系统提示词与助手思考逻辑已更新）。\n");
+                    }
+                }
+            } else {
+                let options = vec![
+                    "🇬🇧 English",
+                    "🇮🇩 Bahasa Indonesia",
+                    "🇨🇳 中文 (Chinese)",
+                ];
+                match Select::new("Pilih bahasa respon AI agent (Select response language):", options).prompt() {
+                    Ok(selected) => {
+                        let chosen = SupportedLanguage::from_str(selected);
+                        user_profile.response_language = chosen.display_name().to_string();
+                        save_user_profile(user_profile);
+                        match chosen {
+                            SupportedLanguage::English => {
+                                println!("\n✔ Active response language set to: English.\n");
+                            }
+                            SupportedLanguage::Indonesian => {
+                                println!("\n✔ Bahasa respon aktif disetel ke: Bahasa Indonesia.\n");
+                            }
+                            SupportedLanguage::Chinese => {
+                                println!("\n✔ 当前回复语言已设置为：中文（简体中文）。\n");
+                            }
+                        }
+                    }
+                    _ => println!("Bahasa tidak berubah.\n"),
+                }
+            }
+            true
+        }
+        "/provider" | "/providers" => {
+            let sub = if parts.len() > 1 { parts[1].to_lowercase() } else { String::new() };
+            match sub.as_str() {
+                "list" => {
+                    print_providers_list(providers_reg);
+                }
+                "switch" | "use" | "select" => {
+                    if parts.len() > 2 {
+                        let target_id = parts[2];
+                        match providers_reg.switch_active(target_id) {
+                            Ok(p) => {
+                                *current_model = p.default_model.clone();
+                                println!("\n✔ Beralih ke provider: {} [{}] (Default Model: {})\n", p.name, p.protocol, current_model);
+                                probe_and_update_switched_provider(providers_reg, &p.id, current_model);
+                            }
+                            Err(e) => println!("\n❌ {}", e),
+                        }
+                    } else {
+                        let options: Vec<String> = providers_reg.providers.iter().map(|p| {
+                            let mark = if p.id == providers_reg.active_provider_id { "★ [ACTIVE] " } else { "  " };
+                            format!("{}{:<18} │ {:<18} │ {}", mark, p.id, p.protocol, p.name)
+                        }).collect();
+
+                        match Select::new("Pilih AI Provider aktif:", options).prompt() {
+                            Ok(selected) => {
+                                if let Some(id_part) = selected.split('│').next() {
+                                    let clean_id = id_part.replace("★ [ACTIVE]", "").trim().to_string();
+                                    if let Ok(p) = providers_reg.switch_active(&clean_id) {
+                                        *current_model = p.default_model.clone();
+                                        println!("\n✔ Beralih ke provider: {} [{}] (Default Model: {})\n", p.name, p.protocol, current_model);
+                                        probe_and_update_switched_provider(providers_reg, &p.id, current_model);
+                                    }
+                                }
+                            }
+                            _ => println!("Provider tetap.\n"),
+                        }
+                    }
+                }
+                "add" | "new" => {
+                    if parts.len() >= 4 {
+                        let id = parts[2].to_string();
+                        let base_url = parts[3].to_string();
+                        let api_key = parts.get(4).unwrap_or(&"").to_string();
+                        let protocol = if let Some(&proto_str) = parts.get(6) {
+                            ApiProtocol::from_str(proto_str)
+                        } else if let Some(&proto_str) = parts.get(5) {
+                            if proto_str.contains("anthropic") || proto_str.contains("claude") || proto_str.contains("openai") {
+                                ApiProtocol::from_str(proto_str)
+                            } else {
+                                ApiProtocol::OpenAi
+                            }
+                        } else {
+                            ApiProtocol::from_str(&base_url)
+                        };
+                        let default_model = if let Some(&m) = parts.get(5) {
+                            if m != "openai" && m != "anthropic" {
+                                m.to_string()
+                            } else {
+                                match protocol {
+                                    ApiProtocol::OpenAi => "gpt-4o-mini".to_string(),
+                                    ApiProtocol::Anthropic => "claude-3-5-sonnet-20241022".to_string(),
+                                }
+                            }
+                        } else {
+                            match protocol {
+                                ApiProtocol::OpenAi => "gpt-4o-mini".to_string(),
+                                ApiProtocol::Anthropic => "claude-3-5-sonnet-20241022".to_string(),
+                            }
+                        };
+                        add_provider_direct(providers_reg, current_model, id, base_url, api_key, default_model, protocol);
+                    } else {
+                        interactive_add_provider(providers_reg, current_model);
+                    }
+                }
+                "delete" | "remove" | "rm" => {
+                    if parts.len() > 2 {
+                        let target_id = parts[2];
+                        match providers_reg.remove(target_id) {
+                            Ok(_) => println!("\n✔ Provider '{}' berhasil dihapus.\n", target_id),
+                            Err(e) => println!("\n❌ {}", e),
+                        }
+                    } else {
+                        let deletable: Vec<String> = providers_reg.providers
+                            .iter()
+                            .filter(|p| p.id != providers_reg.active_provider_id)
+                            .map(|p| format!("{:<16} │ {}", p.id, p.name))
+                            .collect();
+
+                        if deletable.is_empty() {
+                            println!("\nTidak ada provider lain yang dapat dihapus.\n");
+                        } else {
+                            match Select::new("Pilih provider yang ingin dihapus:", deletable).prompt() {
+                                Ok(selected) => {
+                                    if let Some(id) = selected.split('│').next() {
+                                        let target_id = id.trim();
+                                        match providers_reg.remove(target_id) {
+                                            Ok(_) => println!("\n✔ Provider '{}' berhasil dihapus.\n", target_id),
+                                            Err(e) => println!("\n❌ {}", e),
+                                        }
+                                    }
+                                }
+                                _ => println!("Batal menghapus.\n"),
+                            }
+                        }
+                    }
+                }
+                "probe" | "check" | "test" => {
+                    run_and_print_probe(providers_reg, current_model);
+                }
+                _ => {
+                    println!("\n╭─────────────────────────────────────────────────────────────╮");
+                    println!("│ 🔌 AI Provider Management Subcommands                       │");
+                    println!("├─────────────────────────────────────────────────────────────┤");
+                    println!("│  • /provider list         Daftar semua provider terkonfigurasi│");
+                    println!("│  • /provider switch [id]  Ganti provider AI aktif          │");
+                    println!("│  • /provider add          Tambah provider custom/resmi baru│");
+                    println!("│  • /provider probe        Live test endpoint & deteksi limit│");
+                    println!("│  • /provider delete [id]  Hapus konfigurasi provider       │");
+                    println!("╰─────────────────────────────────────────────────────────────╯\n");
+                    print_providers_list(providers_reg);
+                }
+            }
+            true
+        }
+        "/probe" | "/check-model" => {
+            run_and_print_probe(providers_reg, current_model);
             true
         }
         "/tools" => {
-            println!("\n══════════════════════════════════════════════════════════════");
-            println!(" 🛠️  Built-in Autonomous Agent Tools (Inspirasi: fx)");
-            println!("══════════════════════════════════════════════════════════════");
+            println!("\n╭──────────────────┬────────────────────┬────────────────────────────────────────────────────────────╮");
+            println!("│ Tool Name        │ Policy             │ Capabilities & Description                                 │");
+            println!("├──────────────────┼────────────────────┼────────────────────────────────────────────────────────────┤");
             let tool_list = [
-                ("read_file", "Membaca konten berkas dengan range baris (start_line, end_line)", "Safe (Auto)"),
-                ("write_file", "Menulis berkas baru atau menimpa berkas yang ada", "Mutating (Prompt)"),
-                ("edit_file", "Mengganti potongan kode eksak (target -> replacement)", "Mutating (Prompt)"),
-                ("glob_files", "Mencari path berkas berdasarkan pola wildcard (*.rs, dll.)", "Safe (Auto)"),
-                ("grep_files", "Mencari teks literal di seluruh berkas proyek dengan line number", "Safe (Auto)"),
-                ("shell", "Mengeksekusi perintah terminal (stdout, stderr, exit code)", "Mutating (Prompt)"),
-                ("read_tool_result", "Membaca potongan berikutnya dari hasil tool yang sangat panjang", "Safe (Auto)"),
-                ("ask_user_question", "Bertanya interaktif ke pengguna jika butuh klarifikasi", "Interactive"),
-                ("skill", "Memuat instruksi dari file SKILL.md lokal", "Safe (Auto)"),
+                ("read_file", "Safe (Auto)", "Membaca konten berkas dengan range baris spesifik"),
+                ("write_file", "Mutating (Prompt)", "Menulis berkas baru / menimpa (auto snapshot + self-heal)"),
+                ("edit_file", "Mutating (Prompt)", "Mengganti blok kode eksak (auto snapshot + self-heal)"),
+                ("glob_files", "Safe (Auto)", "Mencari path berkas pola wildcard (*.rs, *.py, dll.)"),
+                ("grep_files", "Safe (Auto)", "Mencari pola teks literal di seluruh berkas proyek"),
+                ("shell", "Mutating (Prompt)", "Mengeksekusi command terminal (stdout, stderr, exit code)"),
+                ("read_tool_result", "Safe (Auto)", "Membaca chunk lanjutan hasil tool berukuran panjang"),
+                ("ask_user_question", "Interactive", "Mengajukan pertanyaan klarifikasi interaktif ke user"),
+                ("skill", "Safe (Auto)", "Memuat instruksi spesialis dari SKILL.md lokal"),
+                ("manage_memory", "Safe (Auto)", "Membaca atau menulis memori proyek (.ctrl/MEMORY.md)"),
+                ("code_check", "Safe (Auto)", "Cek diagnostik compiler (cargo check, python, tsc)"),
+                ("web_fetch", "Safe (Auto)", "Fetch webpage dari URL & konversi ke markdown bersih"),
+                ("web_search", "Safe (Auto)", "Pencarian DuckDuckGo untuk dokumentasi & solusi issue"),
+                ("subagent", "Autonomous", "Delegasikan task cabang ke autonomous subagent terisolasi"),
+                ("mcp__*", "MCP Bridge", "Tools eksternal dinamis dari server .ctrl/mcp.json"),
             ];
-            for (t_name, t_desc, t_pol) in tool_list {
-                println!(" • {:18} [{:17}] : {}", t_name, t_pol, t_desc);
+            for (t_name, t_pol, t_desc) in tool_list {
+                println!("│ {:<16} │ {:<18} │ {:<58} │", t_name, t_pol, t_desc);
             }
-            println!("══════════════════════════════════════════════════════════════\n");
+            println!("╰──────────────────┴────────────────────┴────────────────────────────────────────────────────────────╯\n");
+            true
+        }
+        "/undo" => {
+            match crate::agent::checkpoint::CheckpointManager::undo_last() {
+                Ok(msg) => println!("\n{}\n", msg),
+                Err(e) => println!("\n❌ Undo error: {}\n", e),
+            }
+            true
+        }
+        "/diff" => {
+            let filter = if parts.len() > 1 { Some(parts[1]) } else { None };
+            match crate::agent::checkpoint::CheckpointManager::get_diff(filter) {
+                Ok(diff) => {
+                    println!("\n╭─────────────────────────────────────────────────────────────╮");
+                    println!("│ 🔍 Unified Diff (Git & File Mutation Snapshots)             │");
+                    println!("╰─────────────────────────────────────────────────────────────╯");
+                    println!("{}", diff);
+                    println!("───────────────────────────────────────────────────────────────\n");
+                }
+                Err(e) => println!("\n❌ Diff error: {}\n", e),
+            }
+            true
+        }
+        "/check" => {
+            let target = if parts.len() > 1 { Some(parts[1]) } else { None };
+            match crate::tools::self_heal::run_code_check(target) {
+                Ok(res) => println!("\n{}\n", res),
+                Err(e) => println!("\n❌ Code check error: {}\n", e),
+            }
+            true
+        }
+        "/compact" => {
+            let active_p = providers_reg.get_active_provider();
+            match crate::agent::compaction::force_compact_context(conversation, current_model, &active_p.api_key, &active_p.base_url, active_p.protocol) {
+                Ok(res) => println!("\n{}\n", res),
+                Err(e) => println!("\n❌ Compaction error: {}\n", e),
+            }
+            true
+        }
+        "/mcp" => {
+            let summary = crate::tools::mcp::McpManager::get_status_summary();
+            println!("\n{}\n", summary);
+            true
+        }
+        "/stream" => {
+            if parts.len() > 1 {
+                match parts[1].to_lowercase().as_str() {
+                    "on" | "enable" | "true" => *streaming = true,
+                    "off" | "disable" | "false" => *streaming = false,
+                    "toggle" => *streaming = !*streaming,
+                    _ => println!("Pilihan: /stream on | /stream off | /stream toggle"),
+                }
+            } else {
+                *streaming = !*streaming;
+            }
+            println!("\n✔ Real-time SSE streaming: {}\n", if *streaming { "AKTIF" } else { "NONAKTIF" });
+            true
+        }
+        "/checkpoints" => {
+            let records = crate::agent::checkpoint::CheckpointManager::list_checkpoints();
+            if records.is_empty() {
+                println!("\nBelum ada snapshot checkpoint yang tersimpan.\n");
+            } else {
+                println!("\n╭─────────────────────────────────────────────────────────────╮");
+                println!("│ 🕒 File Mutation Checkpoints History                        │");
+                println!("├─────────────────────────────────────────────────────────────┤");
+                for r in records.iter().rev().take(10) {
+                    println!("│ • #{:<3} [{}] {:<8} -> {:<26}│", r.id, r.timestamp, r.action, r.file_path);
+                }
+                println!("╰─────────────────────────────────────────────────────────────╯\n");
+            }
             true
         }
         "/permissions" | "/security" => {
@@ -798,21 +1338,21 @@ fn handle_slash_command(
             println!("\nStatus Permission Mode saat ini: {}\n", current_str);
 
             let options = vec![
-                "Ask - Selalu minta konfirmasi untuk shell / write / edit",
-                "AutoApprove - Eksekusi otomatis tanpa konfirmasi (seperti unattended agent)",
-                "ReadOnly - Blokir semua eksekusi shell dan modifikasi berkas",
-                "Batal / Tidak berubah",
+                "🛡️  Ask          │ Minta konfirmasi untuk shell / write / edit (Recommended)",
+                "⚡ AutoApprove  │ Eksekusi otomatis tanpa konfirmasi (Unattended / Fast mode)",
+                "🔒 ReadOnly     │ Blokir semua eksekusi shell dan modifikasi berkas",
+                "❌ Batal        │ Tidak berubah",
             ];
 
             match Select::new("Pilih Permission Mode baru:", options).prompt() {
                 Ok(selected) => {
-                    if selected.starts_with("Ask") {
+                    if selected.contains("Ask") {
                         permission_gate.mode = PermissionMode::Ask;
                         println!("✔ Permission Mode disetel ke: Ask\n");
-                    } else if selected.starts_with("AutoApprove") {
+                    } else if selected.contains("AutoApprove") {
                         permission_gate.mode = PermissionMode::AutoApprove;
                         println!("✔ Permission Mode disetel ke: AutoApprove\n");
-                    } else if selected.starts_with("ReadOnly") {
+                    } else if selected.contains("ReadOnly") {
                         permission_gate.mode = PermissionMode::ReadOnly;
                         println!("✔ Permission Mode disetel ke: ReadOnly\n");
                     }
@@ -824,11 +1364,11 @@ fn handle_slash_command(
         "/memory" => {
             match MemoryManager::load_long_term_memory() {
                 Some(mem) => {
-                    println!("\n══════════════════════════════════════════════════════════════");
-                    println!(" 🧠 Workspace Long-Term Memory (.ctrl/MEMORY.md)");
-                    println!("══════════════════════════════════════════════════════════════");
+                    println!("\n╭─────────────────────────────────────────────────────────────╮");
+                    println!("│ 🧠 Workspace Long-Term Memory (.ctrl/MEMORY.md)             │");
+                    println!("╰─────────────────────────────────────────────────────────────╯");
                     println!("{}", mem);
-                    println!("══════════════════════════════════════════════════════════════\n");
+                    println!("───────────────────────────────────────────────────────────────\n");
                 }
                 None => {
                     println!("\nBelum ada catatan memori yang tersimpan di .ctrl/MEMORY.md.\nAI Agent akan otomatis mencatat file dan keputusan penting ke sini.\n");
@@ -867,6 +1407,7 @@ fn handle_slash_command(
             true
         }
         "/tokens" | "/usage" | "/context" => {
+            let active_p = providers_reg.get_active_provider();
             if parts.len() > 1 {
                 let sub = parts[1].to_lowercase();
                 match sub.as_str() {
@@ -897,7 +1438,7 @@ fn handle_slash_command(
                     }
                 }
             } else {
-                print_token_stats(tracker, current_model, user_profile.show_token_usage);
+                print_token_stats(tracker, current_model, Some(active_p), user_profile.show_token_usage);
             }
             true
         }
@@ -905,25 +1446,30 @@ fn handle_slash_command(
             if parts.len() > 1 {
                 let new_model = parts[1..].join(" ");
                 *current_model = new_model;
-                println!("\n✔ Active model switched to: {}\n", current_model);
+                println!("\n✔ Model AI aktif: {}\n", current_model);
             } else {
                 let options = vec![
-                    "glm-5.3-flash (OpenAgentic / Zhipu)",
-                    "glm-4-plus (OpenAgentic / Zhipu)",
-                    "deepseek-chat (DeepSeek V3)",
-                    "deepseek-reasoner (DeepSeek R1)",
-                    "llama-3.3-70b-versatile (Groq)",
-                    "qwen-2.5-coder-32b (Groq)",
-                    "gpt-4o-mini (OpenAI)",
-                    "gpt-4o (OpenAI)",
-                    "anthropic/claude-3.5-sonnet (OpenRouter)",
-                    "Batal / Cancel",
+                    "⚡ glm-5.3-flash              │ 1M Ctx   │ 128k Out │ OpenAgentic / Zhipu (Default)",
+                    "🧠 deepseek-reasoner          │ 64k Ctx  │ 8k Out   │ DeepSeek R1 Reasoning",
+                    "💬 deepseek-chat              │ 64k Ctx  │ 8k Out   │ DeepSeek V3 General",
+                    "🚀 glm-4-plus                 │ 128k Ctx │ 4k Out   │ Zhipu GLM-4 Flagship",
+                    "🎭 claude-3-5-sonnet-20241022 │ 200k Ctx │ 8k Out   │ Anthropic Claude 3.5 Sonnet",
+                    "✨ claude-3-7-sonnet          │ 200k Ctx │ 8k Out   │ Anthropic Claude 3.7 Sonnet",
+                    "⚡ llama-3.3-70b-versatile    │ 128k Ctx │ 8k Out   │ Meta Llama 3.3 (Groq)",
+                    "💻 qwen-2.5-coder-32b         │ 128k Ctx │ 8k Out   │ Qwen 2.5 Coder",
+                    "🎯 gpt-4o-mini                │ 128k Ctx │ 16k Out  │ OpenAI Fast & Smart",
+                    "🌟 gpt-4o                     │ 128k Ctx │ 16k Out  │ OpenAI Flagship",
+                    "❌ Batal / Cancel",
                 ];
-                match Select::new("Pilih model yang ingin digunakan (gunakan panah ↑/↓):", options).prompt() {
-                    Ok(selected) if !selected.starts_with("Batal") => {
-                        let model_name = selected.split_whitespace().next().unwrap_or("").to_string();
-                        *current_model = model_name;
-                        println!("\n✔ Active model switched to: {}\n", current_model);
+                match Select::new("Pilih model AI (gunakan panah ↑/↓):", options).prompt() {
+                    Ok(selected) if !selected.starts_with("❌") && !selected.contains("Batal") => {
+                        if let Some(first_col) = selected.split('│').next() {
+                            let model_name = first_col.split_whitespace().last().unwrap_or("").to_string();
+                            if !model_name.is_empty() {
+                                *current_model = model_name;
+                                println!("\n✔ Model AI aktif: {}\n", current_model);
+                            }
+                        }
                     }
                     _ => {
                         println!("\nModel tetap: {}\n", current_model);
@@ -933,7 +1479,7 @@ fn handle_slash_command(
             true
         }
         "/models" => {
-            handle_slash_command("/model", current_model, active_skill, user_profile, base_url, tracker, permission_gate, conversation)
+            handle_slash_command("/model", current_model, active_skill, user_profile, providers_reg, tracker, permission_gate, conversation, streaming)
         }
         "/skill" | "/skills" => {
             if parts.len() > 1 && cmd == "/skill" {
@@ -950,17 +1496,18 @@ fn handle_slash_command(
             } else {
                 let mut options: Vec<String> = get_available_skills()
                     .iter()
-                    .map(|s| format!("{} ({}) - {}", s.name, s.id, s.description))
+                    .map(|s| format!("{:<28} │ {:<16} │ {}", s.name, s.id, s.description))
                     .collect();
-                options.push("🔄 reset - Kembali ke General Assistant".to_string());
-                options.push("❌ Batal / Cancel".to_string());
+                options.push("🔄 Reset Skill             │ default          │ Kembali ke mode General Assistant".to_string());
+                options.push("❌ Batal / Cancel          │ cancel           │ Tidak berubah".to_string());
 
                 match Select::new("Pilih Skill untuk AI Agent (gunakan panah ↑/↓):", options).prompt() {
-                    Ok(selected) if !selected.starts_with("❌") => {
-                        if selected.contains("reset") {
+                    Ok(selected) if !selected.starts_with("❌") && !selected.contains("Batal") => {
+                        if selected.contains("Reset") || selected.contains("default") {
                             *active_skill = None;
                             println!("\n✔ Skill dinonaktifkan (kembali ke General Assistant).\n");
-                        } else if let Some(id) = selected.split('(').nth(1).and_then(|s| s.split(')').next()) {
+                        } else if let Some(id_col) = selected.split('│').nth(1) {
+                            let id = id_col.trim();
                             if let Some(found) = get_available_skills().into_iter().find(|s| s.id == id) {
                                 println!("\n✔ Skill aktif: {} ({})\n", found.name, found.id);
                                 *active_skill = Some(found);
@@ -979,58 +1526,217 @@ fn handle_slash_command(
             true
         }
         "/dev" | "/developer" | "/author" | "/about" => {
-            println!("\n══════════════════════════════════════════════════════════════");
-            println!(" 💻 About the Developer & Project");
-            println!("══════════════════════════════════════════════════════════════");
-            println!("  • Creator / Dev  : galangfjr");
-            println!("  • Tech Stack     : Python, TypeScript, Rust, Zig");
-            println!("  • Project        : ctrl-cli (Ultra-lightweight AI Coding Agent)");
-            println!("  • Architecture   : Pure Rust (UCRT64 GNU), LTO Optimized (~1.8 MB)");
-            println!("  • Tools Engine   : Unix-style autonomous tool runner (inspired by fx)");
-            println!("══════════════════════════════════════════════════════════════\n");
+            println!("\n╭─────────────────────────────────────────────────────────────╮");
+            println!("│ 💻 About Developer & Architecture                           │");
+            println!("├─────────────────────────────────────────────────────────────┤");
+            println!("│  • Creator / Dev  : {:<40}│", user_profile.name);
+            println!("│  • Tech Stack     : {:<40}│", user_profile.tech_stack.join(", "));
+            println!("│  • Project        : {:<40}│", "ctrl-cli (Autonomous Coding Agent)");
+            println!("│  • Binary Size    : {:<40}│", "~2.1 MB (LTO & Strip Optimized)");
+            println!("│  • Architecture   : {:<40}│", "Pure Rust ReAct loop + 14 Unix Tools");
+            println!("│  • Multi-Provider : {:<40}│", "OpenAI-Compatible + Anthropic Native");
+            println!("│  • Multilingual   : {:<40}│", "English, Bahasa Indonesia, 中文");
+            println!("╰─────────────────────────────────────────────────────────────╯\n");
             true
         }
         "/profile" => {
-            println!("\n══════════════════════════════════════════════════════════════");
-            println!(" 👤 Developer Profile");
-            println!("══════════════════════════════════════════════════════════════");
-            println!("  • Nama Panggilan : {}", user_profile.name);
-            println!("  • Tech Stack     : {}", user_profile.tech_stack.join(", "));
-            println!("  • Bahasa Respon  : {}", user_profile.response_language);
-            println!("  • Gaya Coding    : {}", user_profile.coding_style);
-            println!("══════════════════════════════════════════════════════════════\n");
+            println!("\n╭─────────────────────────────────────────────────────────────╮");
+            println!("│ 👤 Developer Profile                                        │");
+            println!("├─────────────────────────────────────────────────────────────┤");
+            println!("│  • Nama Panggilan : {:<40}│", user_profile.name);
+            println!("│  • Tech Stack     : {:<40}│", user_profile.tech_stack.join(", "));
+            println!("│  • Bahasa Respon  : {:<40}│", user_profile.response_language);
+            println!("│  • Token Badge    : {:<40}│", if user_profile.show_token_usage { "Aktif" } else { "Nonaktif" });
+            println!("├─────────────────────────────────────────────────────────────┤");
+            println!("│  • Coding Style Guidelines:                                 │");
+            for line in textwrap_simple(&user_profile.coding_style, 54) {
+                println!("│    {:<57}│", line);
+            }
+            println!("╰─────────────────────────────────────────────────────────────╯");
+
+            let edit_opts = vec![
+                "🌐 Ganti Bahasa Respon (English / Indonesia / 中文)",
+                "👤 Ubah Nama & Coding Style",
+                "⬅️  Kembali",
+            ];
+            if let Ok(choice) = Select::new("Opsi profil:", edit_opts).prompt() {
+                if choice.contains("Bahasa") {
+                    handle_slash_command("/lang", current_model, active_skill, user_profile, providers_reg, tracker, permission_gate, conversation, streaming);
+                } else if choice.contains("Ubah Nama") {
+                    if let Ok(new_name) = Text::new("Nama panggilan:").with_default(&user_profile.name).prompt() {
+                        user_profile.name = new_name;
+                        save_user_profile(user_profile);
+                        println!("✔ Profil berhasil disimpan!\n");
+                    }
+                }
+            }
             true
         }
         "/info" | "/config" => {
-            let ctx_info = get_model_context_info(current_model);
+            let active_p = providers_reg.get_active_provider();
+            let ctx_info = get_model_context_info(current_model, Some(active_p));
             let perm_str = match permission_gate.mode {
-                PermissionMode::Ask => "Ask",
-                PermissionMode::AutoApprove => "AutoApprove",
-                PermissionMode::ReadOnly => "ReadOnly",
+                PermissionMode::Ask => "Ask (Prompt on mutations)",
+                PermissionMode::AutoApprove => "AutoApprove (Unattended / Fast)",
+                PermissionMode::ReadOnly => "ReadOnly (Safe guard)",
             };
-            println!("\nActive Session Configuration:");
-            println!("  • Endpoint:       {}", base_url);
-            println!("  • Active Model:   {} ({})", current_model, ctx_info.note);
-            println!("  • Context Window: {} tokens", format_number(ctx_info.context_window));
+            println!("\n\x1B[1;36m╭─ ℹ️  Active Session Configuration ──────────────────────────────╮\x1B[0m");
+            println!("  \x1B[90mProvider       :\x1B[0m \x1B[1;37m{}\x1B[0m \x1B[90m[{}]\x1B[0m", active_p.name, active_p.protocol);
+            println!("  \x1B[90mEndpoint       :\x1B[0m \x1B[36m{}\x1B[0m", active_p.base_url);
+            println!("  \x1B[90mActive Model   :\x1B[0m \x1B[1;37m{}\x1B[0m", current_model);
+            println!("  \x1B[90mFamily / Note  :\x1B[0m \x1B[37m{}\x1B[0m", ctx_info.note);
+            println!("  \x1B[90mContext Window :\x1B[0m \x1B[36m{} tokens\x1B[0m", format_number(ctx_info.context_window));
             if let Some(mo) = ctx_info.max_output {
-                println!("  • Max Output:     {} tokens", format_number(mo));
+                println!("  \x1B[90mMax Output     :\x1B[0m \x1B[36m{} tokens\x1B[0m", format_number(mo));
             }
-            println!(
-                "  • Active Skill:   {}",
-                active_skill.as_ref().map(|s| s.name).unwrap_or("None (General Assistant)")
-            );
-            println!("  • Permission:     {}", perm_str);
-            println!("  • History Turns:  {} messages in context", conversation.len());
-            println!("  • Developer:      {} (Stack: {})", user_profile.name, user_profile.tech_stack.join(", "));
-            println!("  • Token Badge:    {}", if user_profile.show_token_usage { "Aktif (otomatis)" } else { "Nonaktif" });
-            println!("  • Session Tokens: {} total ({} queries)", format_number(tracker.total_tokens), tracker.query_count);
-            println!("  • API Key:        Loaded (masked)");
-            println!();
+            println!("  \x1B[90mResponse Lang  :\x1B[0m \x1B[32m{}\x1B[0m", user_profile.response_language);
+            println!("  \x1B[90mActive Skill   :\x1B[0m \x1B[35m{}\x1B[0m", active_skill.as_ref().map(|s| s.name).unwrap_or("General Assistant"));
+            println!("  \x1B[90mPermission Mode:\x1B[0m \x1B[33m{}\x1B[0m", perm_str);
+            println!("  \x1B[90mHistory Turns  :\x1B[0m \x1B[37m{} messages in context\x1B[0m", conversation.len());
+            println!("  \x1B[90mReal-Time SSE  :\x1B[0m {}", if *streaming { "\x1B[32mAktif\x1B[0m" } else { "\x1B[90mNonaktif\x1B[0m" });
+            println!("  \x1B[90mSession Tokens :\x1B[0m \x1B[37m{} ({} queries)\x1B[0m", format_number(tracker.total_tokens), tracker.query_count);
+            println!("\x1B[1;36m╰─────────────────────────────────────────────────────────────────╯\x1B[0m\n");
             true
         }
         "/clear" => {
             print!("\x1B[2J\x1B[1;1H");
             let _ = std::io::stdout().flush();
+            true
+        }
+        "/tasks" => {
+            use crate::agent::tasks::TaskManager;
+            let tm = TaskManager::global();
+            let sub = if parts.len() > 1 { parts[1].to_lowercase() } else { "list".to_string() };
+
+            match sub.as_str() {
+                "list" | "ls" => {
+                    let snapshots = tm.list_tasks();
+                    if snapshots.is_empty() {
+                        println!("\nTidak ada background task yang terdaftar.\n");
+                    } else {
+                        println!("\n╭─────────────────────────────────────────────────────────────╮");
+                        println!("│ 🚀 Background Tasks ({} total){:>34}│", snapshots.len(), "");
+                        println!("├─────────────────────────────────────────────────────────────┤");
+                        for snap in &snapshots {
+                            let desc_short = if snap.description.len() > 35 {
+                                format!("{}...", &snap.description[..32])
+                            } else {
+                                snap.description.clone()
+                            };
+                            println!("│ {} {:<10} {:<37} {:>6} │",
+                                snap.status.badge(), snap.id, desc_short, snap.elapsed_human);
+                        }
+                        println!("╰─────────────────────────────────────────────────────────────╯\n");
+                    }
+                }
+                "view" | "status" => {
+                    if parts.len() < 3 {
+                        println!("\nGunakan: /tasks view <task_id>\n");
+                    } else {
+                        let task_id = parts[2];
+                        match tm.get_task(task_id) {
+                            Some(snap) => {
+                                println!("\n╭───── Task Detail ─────────────────────────────────────────╮");
+                                println!("  ID:          {}", snap.id);
+                                println!("  Name:        {}", snap.name);
+                                println!("  Status:      {}", snap.status.badge());
+                                println!("  Description: {}", snap.description);
+                                println!("  Created:     {}", snap.created_at);
+                                if let Some(ref s) = snap.started_at {
+                                    println!("  Started:     {}", s);
+                                }
+                                if let Some(ref f) = snap.finished_at {
+                                    println!("  Finished:    {}", f);
+                                }
+                                println!("  Elapsed:     {}", snap.elapsed_human);
+                                if let Some(ref r) = snap.result {
+                                    let preview = if r.len() > 300 { &r[..300] } else { r };
+                                    println!("  Result:      {}{}",
+                                        preview, if r.len() > 300 { "..." } else { "" });
+                                }
+                                if let Some(ref e) = snap.error {
+                                    println!("  Error:       {}", e);
+                                }
+                                println!("╰──────────────────────────────────────────────────────────╯\n");
+                            }
+                            None => println!("\nTask '{}' tidak ditemukan.\n", task_id),
+                        }
+                    }
+                }
+                "cancel" => {
+                    if parts.len() < 3 {
+                        println!("\nGunakan: /tasks cancel <task_id>\n");
+                    } else {
+                        let task_id = parts[2];
+                        match tm.cancel_task(task_id) {
+                            Ok(()) => {
+                                tm.mark_task_notified(task_id);
+                                println!("\n✔ Task '{}' berhasil dibatalkan.\n", task_id);
+                            }
+                            Err(e) => println!("\n❌ Gagal membatalkan task: {}\n", e),
+                        }
+                    }
+                }
+                "wait" => {
+                    if parts.len() < 3 {
+                        println!("\nGunakan: /tasks wait <task_id> [timeout_secs]\n");
+                    } else {
+                        let task_id = parts[2];
+                        let timeout = parts.get(3)
+                            .and_then(|s| s.parse::<u64>().ok())
+                            .map(std::time::Duration::from_secs);
+                        println!("\n⏳ Menunggu task '{}' selesai...\n", task_id);
+                        match tm.await_task(task_id, timeout) {
+                            Ok(snap) => {
+                                tm.mark_task_notified(task_id);
+                                println!("✔ Task '{}' selesai: {} ({})\n",
+                                    snap.id, snap.status.as_str(), snap.elapsed_human);
+                                if let Some(ref r) = snap.result {
+                                    let preview = if r.len() > 500 { &r[..500] } else { r };
+                                    println!("{}{}\n", preview, if r.len() > 500 { "..." } else { "" });
+                                }
+                                if let Some(ref e) = snap.error {
+                                    println!("Error: {}\n", e);
+                                }
+                            }
+                            Err(e) => println!("❌ Gagal menunggu task: {}\n", e),
+                        }
+                    }
+                }
+                "logs" | "log" => {
+                    if parts.len() < 3 {
+                        println!("\nGunakan: /tasks logs <task_id>\n");
+                    } else {
+                        let task_id = parts[2];
+                        match tm.get_task_logs(task_id) {
+                            Some(log_lines) => {
+                                if log_lines.is_empty() {
+                                    println!("\nBelum ada log untuk task '{}'.\n", task_id);
+                                } else {
+                                    println!("\n╭───── Task Logs: {} ({} lines) ─────╮", task_id, log_lines.len());
+                                    let start = if log_lines.len() > 50 { log_lines.len() - 50 } else { 0 };
+                                    for line in &log_lines[start..] {
+                                        println!("  {}", line);
+                                    }
+                                    if start > 0 {
+                                        println!("  ... ({} earlier lines omitted)", start);
+                                    }
+                                    println!("╰──────────────────────────────────────────────────────────╯\n");
+                                }
+                            }
+                            None => println!("\nTask '{}' tidak ditemukan.\n", task_id),
+                        }
+                    }
+                }
+                "clear" => {
+                    let removed = tm.clear_completed();
+                    println!("\n✔ {} completed task(s) dihapus dari registry.\n", removed);
+                }
+                _ => {
+                    println!("\nSub-perintah tidak dikenal: '{}'\n", sub);
+                    println!("Gunakan: /tasks [list|view <id>|cancel <id>|wait <id>|logs <id>|clear]\n");
+                }
+            }
             true
         }
         "/exit" | "/quit" => false,
@@ -1041,38 +1747,336 @@ fn handle_slash_command(
     }
 }
 
-fn start_repl(user_profile: &mut UserProfile) -> Result<()> {
-    let (api_key, base_url, default_model) = get_config().unwrap_or((
-        String::new(),
-        "https://api.openai.com/v1".to_string(),
-        "gpt-4o-mini".to_string(),
-    ));
-    let mut current_model = default_model;
+fn print_providers_list(registry: &ProvidersRegistry) {
+    println!("\n\x1B[1;36m╭─ 🔌 Configured AI Providers ───────────────────────────────────────────────────────────╮\x1B[0m");
+    println!("  \x1B[90m{:<18} {:<10} {:<30} {:<14} {:<16}\x1B[0m", "PROVIDER ID", "PROTOCOL", "BASE URL", "DEF. MODEL", "CONTEXT / OUT");
+    println!("  \x1B[90m────────────────────────────────────────────────────────────────────────────────────────\x1B[0m");
+    for p in &registry.providers {
+        let is_active = p.id == registry.active_provider_id;
+        let star = if is_active { "\x1B[1;32m★\x1B[0m" } else { " " };
+        let id_colored = if is_active {
+            format!("{} \x1B[1;32m{:<16}\x1B[0m", star, p.id)
+        } else {
+            format!("{} \x1B[37m{:<16}\x1B[0m", star, p.id)
+        };
+        let proto_str = match p.protocol {
+            ApiProtocol::OpenAi => "OpenAI",
+            ApiProtocol::Anthropic => "Anthropic",
+        };
+        let ctx_str = match (p.context_window, p.max_output_tokens) {
+            (Some(c), Some(o)) => format!("{}/{}", format_compact_num(c), format_compact_num(o)),
+            (Some(c), None) => format_compact_num(c),
+            _ => "Auto".to_string(),
+        };
+        let short_url = if p.base_url.len() > 28 {
+            format!("{}...", &p.base_url[..25])
+        } else {
+            p.base_url.clone()
+        };
+        let short_model = if p.default_model.len() > 13 {
+            format!("{}...", &p.default_model[..10])
+        } else {
+            p.default_model.clone()
+        };
+        println!(
+            "  {} {:<10} {:<30} {:<14} {:<16}",
+            id_colored, proto_str, short_url, short_model, ctx_str
+        );
+    }
+    println!("  \x1B[90m────────────────────────────────────────────────────────────────────────────────────────\x1B[0m");
+    println!("  \x1B[90mActive Provider: \x1B[1;32m★ {}\x1B[0m \x1B[90m(/provider switch [id] to switch)\x1B[0m\n", registry.active_provider_id);
+}
+
+fn format_compact_num(n: u64) -> String {
+    if n >= 1_000_000 {
+        format!("{}M", n / 1_000_000)
+    } else if n >= 1_000 {
+        format!("{}k", n / 1_000)
+    } else {
+        n.to_string()
+    }
+}
+
+fn interactive_add_provider(registry: &mut ProvidersRegistry, current_model: &mut String) {
+    println!("\n➕ Tambah Provider AI Baru (OpenAI-Compatible atau Anthropic Messages API)");
+
+    let id = match Text::new("Provider ID (slug unik, contoh: my-vllm, deepseek-local):").prompt() {
+        Ok(v) if !v.trim().is_empty() => v.trim().to_string(),
+        _ => return,
+    };
+
+    let name = match Text::new("Display Name (contoh: My Custom vLLM, DeepSeek Official):").prompt() {
+        Ok(v) if !v.trim().is_empty() => v.trim().to_string(),
+        _ => id.clone(),
+    };
+
+    let proto_opts = vec![
+        "OpenAI-Compatible (Endpoint: /chat/completions, Bearer Token)",
+        "Anthropic Messages API (Endpoint: /messages, x-api-key)",
+    ];
+    let protocol = match Select::new("Pilih protokol API:", proto_opts).prompt() {
+        Ok(choice) => {
+            if choice.starts_with("Anthropic") {
+                ApiProtocol::Anthropic
+            } else {
+                ApiProtocol::OpenAi
+            }
+        }
+        _ => return,
+    };
+
+    let default_url = match protocol {
+        ApiProtocol::OpenAi => "https://api.openai.com/v1",
+        ApiProtocol::Anthropic => "https://api.anthropic.com/v1",
+    };
+    let base_url = match Text::new("Base URL endpoint:").with_default(default_url).prompt() {
+        Ok(v) if !v.trim().is_empty() => v.trim().to_string(),
+        _ => return,
+    };
+
+    let api_key = match Text::new("API Key (kosongkan jika lokal/ollama tanpa auth):").prompt() {
+        Ok(v) => v.trim().to_string(),
+        _ => String::new(),
+    };
+
+    let default_model_hint = match protocol {
+        ApiProtocol::OpenAi => "gpt-4o-mini",
+        ApiProtocol::Anthropic => "claude-3-5-sonnet-20241022",
+    };
+    let default_model = match Text::new("Default Model:").with_default(default_model_hint).prompt() {
+        Ok(v) if !v.trim().is_empty() => v.trim().to_string(),
+        _ => default_model_hint.to_string(),
+    };
+
+    let mut new_provider = ProviderConfig {
+        id: id.clone(),
+        name,
+        protocol,
+        base_url,
+        api_key,
+        default_model: default_model.clone(),
+        context_window: None,
+        max_output_tokens: None,
+    };
+
+    println!("\n🔎 Melakukan live probe untuk mengecek koneksi & auto-detect context limits...");
+    let report = probe_provider_and_model(&new_provider, Some(&default_model));
+    if report.success {
+        println!("✔ {} (Latency: {}ms)", report.status_message, report.latency_ms);
+        println!("✔ Batas Terdeteksi: Context Window: {} tokens | Max Output: {}",
+            format_number(report.context_window),
+            report.max_output_tokens.map(format_number).unwrap_or_else(|| "N/A".to_string())
+        );
+        if !report.models_found.is_empty() {
+            let sample = report.models_found.iter().take(5).cloned().collect::<Vec<_>>().join(", ");
+            println!("✔ Model ditemukan via /models: {}", sample);
+        }
+        new_provider.context_window = Some(report.context_window);
+        new_provider.max_output_tokens = report.max_output_tokens;
+    } else {
+        println!("⚠️  Probe warning: {}", report.status_message);
+        let (cat_ctx, cat_out, _) = resolve_model_limits(&default_model);
+        new_provider.context_window = Some(cat_ctx);
+        new_provider.max_output_tokens = cat_out;
+        println!("   Menggunakan estimasi default: Context {} tokens", format_number(cat_ctx));
+    }
+
+    registry.add_or_update(new_provider);
+    println!("\n✔ Provider '{}' berhasil ditambahkan ke ~/.ctrl-cli/providers.json!", id);
+
+    if let Ok(true) = Confirm::new("Aktifkan provider ini sekarang?").with_default(true).prompt() {
+        if let Ok(p) = registry.switch_active(&id) {
+            *current_model = p.default_model;
+            println!("✔ Provider aktif beralih ke: {} (Model: {})\n", p.name, current_model);
+        }
+    }
+}
+
+fn add_provider_direct(
+    registry: &mut ProvidersRegistry,
+    current_model: &mut String,
+    id: String,
+    base_url: String,
+    api_key: String,
+    default_model: String,
+    protocol: ApiProtocol,
+) {
+    let name = id.clone();
+    let mut new_provider = ProviderConfig {
+        id: id.clone(),
+        name,
+        protocol,
+        base_url,
+        api_key,
+        default_model: default_model.clone(),
+        context_window: None,
+        max_output_tokens: None,
+    };
+
+    println!("\n🔎 Melakukan live probe untuk mengecek koneksi & auto-detect context limits...");
+    let report = probe_provider_and_model(&new_provider, Some(&default_model));
+    if report.success {
+        println!("✔ {} (Latency: {}ms)", report.status_message, report.latency_ms);
+        println!("✔ Batas Terdeteksi: Context Window: {} tokens | Max Output: {}",
+            format_number(report.context_window),
+            report.max_output_tokens.map(format_number).unwrap_or_else(|| "N/A".to_string())
+        );
+        if !report.models_found.is_empty() {
+            let sample = report.models_found.iter().take(5).cloned().collect::<Vec<_>>().join(", ");
+            println!("✔ Model ditemukan via /models: {}", sample);
+        }
+        new_provider.context_window = Some(report.context_window);
+        new_provider.max_output_tokens = report.max_output_tokens;
+    } else {
+        println!("⚠️  Probe warning: {}", report.status_message);
+        let (cat_ctx, cat_out, _) = resolve_model_limits(&default_model);
+        new_provider.context_window = Some(cat_ctx);
+        new_provider.max_output_tokens = cat_out;
+        println!("   Menggunakan estimasi default: Context {} tokens", format_number(cat_ctx));
+    }
+
+    registry.add_or_update(new_provider);
+    println!("\n✔ Provider '{}' berhasil ditambahkan ke ~/.ctrl-cli/providers.json!", id);
+    if let Ok(p) = registry.switch_active(&id) {
+        *current_model = p.default_model;
+        println!("✔ Provider aktif beralih ke: {} (Model: {})\n", p.name, current_model);
+    }
+}
+
+fn probe_and_update_switched_provider(
+    registry: &mut ProvidersRegistry,
+    provider_id: &str,
+    current_model: &str,
+) {
+    let provider = registry.get_active_provider().clone();
+    println!("🔎 Memeriksa konektivitas & context limits untuk provider '{}'...", provider.name);
+    let report = probe_provider_and_model(&provider, Some(current_model));
+    if report.success {
+        registry.update_limits(provider_id, report.context_window, report.max_output_tokens);
+        println!(
+            "✔ Probe OK (Latency: {}ms) | Context: {} tokens | Max Out: {}\n",
+            report.latency_ms,
+            format_number(report.context_window),
+            report.max_output_tokens.map(format_number).unwrap_or_else(|| "N/A".to_string())
+        );
+    } else {
+        println!("⚠️  Probe note: {} (menggunakan limit bawaan)\n", report.status_message);
+    }
+}
+
+fn run_and_print_probe(registry: &mut ProvidersRegistry, current_model: &str) {
+    let provider = registry.get_active_provider().clone();
+    println!("\n╭─────────────────────────────────────────────────────────────╮");
+    println!("│ 🩺 AI Provider & Model Capabilities Live Probe              │");
+    println!("├─────────────────────────────────────────────────────────────┤");
+    println!("│  • Provider ID      : {:<38}│", format!("{} ({})", provider.id, provider.protocol));
+    println!("│  • Endpoint URL     : {:<38}│", provider.base_url);
+    println!("│  • Target Model     : {:<38}│", current_model);
+    println!("╰─────────────────────────────────────────────────────────────╯");
+    print!("⏳ Connecting & probing endpoint capabilities... ");
+    let _ = std::io::stdout().flush();
+
+    let report = probe_provider_and_model(&provider, Some(current_model));
+    print!("\r\x1B[K");
+    let _ = std::io::stdout().flush();
+
+    println!("╭─────────────────────────────────────────────────────────────╮");
+    println!("│ 📊 Probe Diagnostic Report                                  │");
+    println!("├─────────────────────────────────────────────────────────────┤");
+    println!("│  • Connectivity     : {:<38}│", if report.endpoint_reachable { "✔ Reachable" } else { "❌ Unreachable" });
+    println!("│  • Authentication   : {:<38}│", if report.auth_valid { "✔ Valid" } else { "❌ Auth Failed" });
+    println!("│  • Latency (RTT)    : {:<38}│", format!("{} ms", report.latency_ms));
+    println!("│  • Context Window   : {:<38}│", format!("{} tokens", format_number(report.context_window)));
+    if let Some(mo) = report.max_output_tokens {
+        println!("│  • Max Output Limit : {:<38}│", format!("{} tokens", format_number(mo)));
+    }
+    println!("│  • Model Family     : {:<38}│", report.model_note);
+    if !report.models_found.is_empty() {
+        let sample = if report.models_found.len() > 3 {
+            format!("{} models (e.g. {}, {})", report.models_found.len(), report.models_found[0], report.models_found[1])
+        } else {
+            report.models_found.join(", ")
+        };
+        println!("│  • Available Models : {:<38}│", sample);
+    }
+    println!("├─────────────────────────────────────────────────────────────┤");
+    println!("│  • Status           : {:<38}│", report.status_message);
+    if let Some(err) = report.error_detail {
+        println!("│  • Error Detail     : {:<38}│", err);
+    }
+    println!("╰─────────────────────────────────────────────────────────────╯\n");
+
+    if report.success {
+        registry.update_limits(&provider.id, report.context_window, report.max_output_tokens);
+        println!("✔ Batas Context Window ({} tokens) otomatis diintegrasikan ke session tracker & progress bar.\n", format_number(report.context_window));
+    }
+}
+
+/// Drains unnotified terminal background tasks (Completed, Failed, Cancelled)
+/// and prints formatted completion notification banners.
+/// Respects interactive TTY (ANSI color highlights) vs non-TTY (clean plain text).
+fn print_task_completion_notifications(tm: &crate::agent::tasks::TaskManager, is_term: bool) {
+    let unnotified = tm.drain_unnotified_terminal_tasks();
+    if unnotified.is_empty() {
+        return;
+    }
+
+    println!();
+    for snap in &unnotified {
+        println!("{}", snap.format_notification(is_term));
+    }
+    println!();
+}
+
+fn start_repl(user_profile: &mut UserProfile, providers_reg: &mut ProvidersRegistry) -> Result<()> {
+    configure_inquire_theme();
+
+    let active_prov = providers_reg.get_active_provider();
+    let mut current_model = active_prov.default_model.clone();
     let mut active_skill: Option<Skill> = None;
     let mut token_tracker = SessionTokenTracker::default();
     let mut conversation: Vec<ChatMessage> = MemoryManager::load_session_history().unwrap_or_default();
     let mut permission_gate = PermissionGate::default();
+    let mut streaming = true;
 
-    println!("══════════════════════════════════════════════════════════════");
-    println!(" 🤖 ctrl-cli v0.2.0 (Autonomous AI Coding Agent)");
-    println!(" 👋 Created by: galangfjr | Stack: Python, TS, Rust, Zig");
-    println!(" Active Model: {}", current_model);
-    println!(" Active Skill: General Assistant");
-    println!(" Mode: Autonomous Agent with 10 Built-in Tools & Memory");
+    println!();
+    println!("  \x1B[1;36m◆ ctrl-cli\x1B[0m \x1B[90mv0.2.0\x1B[0m \x1B[90m—\x1B[0m \x1B[1;37mAutonomous AI Coding Agent\x1B[0m");
+    println!("  \x1B[90m─────────────────────────────────────────────────────────────────\x1B[0m");
+    println!("  \x1B[90mProvider\x1B[0m  \x1B[1;36m{:<20}\x1B[0m \x1B[90mModel\x1B[0m  \x1B[1;37m{}\x1B[0m \x1B[90m[{} Ctx]\x1B[0m", 
+        format!("{} [{}]", active_prov.name, active_prov.protocol),
+        current_model,
+        format_compact_num(active_prov.context_window.unwrap_or(128_000))
+    );
+    println!("  \x1B[90mUser\x1B[0m      \x1B[33m{:<20}\x1B[0m \x1B[90mLang\x1B[0m   \x1B[32m{}\x1B[0m",
+        format!("{} ({})", user_profile.name, user_profile.tech_stack.first().map(|s| s.as_str()).unwrap_or("Rust")),
+        user_profile.response_language
+    );
+    println!("  \x1B[90mFeatures\x1B[0m  \x1B[37m14 Built-in Tools • Checkpoints • Self-Healing • SSE\x1B[0m");
     if !conversation.is_empty() {
-        println!(" 🧠 [Memory] Sesi sebelumnya dipulihkan: {} pesan tersimpan di .ctrl/session.json", conversation.len());
+        println!("  \x1B[35m●\x1B[0m \x1B[90mMemori Sesi:\x1B[0m \x1B[37m{} pesan dipulihkan dari .ctrl/session.json\x1B[0m", conversation.len());
     }
-    println!(" Type your prompt and press Enter.");
-    println!(" Ketik `/` untuk rekomendasi perintah (/tools, /permissions, /memory, dll.).");
-    println!("══════════════════════════════════════════════════════════════\n");
+    println!("  \x1B[90m─────────────────────────────────────────────────────────────────\x1B[0m");
+    println!("  \x1B[90m💡 Ketik instruksi dan Enter. Ketik \x1B[36m'/'\x1B[90m untuk menu atau \x1B[36m'?'\x1B[90m untuk bantuan.\x1B[0m\n");
 
     let is_term = std::io::stdin().is_terminal();
 
     loop {
-        let prompt_label = if let Some(skill) = &active_skill {
-            format!("[{} | {}] ➜ ", current_model, skill.id)
+        // Inter-turn background task completion notification drain
+        print_task_completion_notifications(crate::agent::tasks::TaskManager::global(), is_term);
+
+        let prompt_label = if is_term {
+            if let Some(skill) = &active_skill {
+                format!("\x1B[36m[{}]\x1B[0m \x1B[35m({})\x1B[0m \x1B[1;32m❯\x1B[0m ", current_model, skill.id)
+            } else {
+                format!("\x1B[36m[{}]\x1B[0m \x1B[1;32m❯\x1B[0m ", current_model)
+            }
         } else {
-            format!("[{}] ➜ ", current_model)
+            // Non-TTY graceful fallback: plain text without ANSI escape sequences
+            if let Some(skill) = &active_skill {
+                format!("[{}] ({}) > ", current_model, skill.id)
+            } else {
+                format!("[{}] > ", current_model)
+            }
         };
 
         let input_line = if is_term {
@@ -1106,16 +2110,23 @@ fn start_repl(user_profile: &mut UserProfile) -> Result<()> {
             continue;
         }
 
-        if trimmed.starts_with('/') {
+        // Apply prefix auto-expansion & autocorrect (e.g. /comp -> /compact, ? -> /help)
+        let (resolved_cmd, auto_note) = resolve_slash_command(trimmed);
+        if let Some(note) = auto_note {
+            println!("\x1B[90m{}\x1B[0m", note);
+        }
+
+        if resolved_cmd.starts_with('/') {
             if !handle_slash_command(
-                trimmed,
+                &resolved_cmd,
                 &mut current_model,
                 &mut active_skill,
                 user_profile,
-                &base_url,
+                providers_reg,
                 &token_tracker,
                 &mut permission_gate,
                 &mut conversation,
+                &mut streaming,
             ) {
                 println!("\nExiting REPL. Goodbye {}!", user_profile.name);
                 break;
@@ -1123,21 +2134,29 @@ fn start_repl(user_profile: &mut UserProfile) -> Result<()> {
             continue;
         }
 
+        let active_p = providers_reg.get_active_provider();
         let system_prompt = build_system_prompt(active_skill.as_ref(), user_profile);
 
         match run_agent_loop(
             trimmed,
             &mut conversation,
             &current_model,
-            &api_key,
-            &base_url,
+            &active_p.api_key,
+            &active_p.base_url,
+            active_p.protocol,
             &mut permission_gate,
             &system_prompt,
             25,
+            streaming,
+            active_p.context_window,
+            None,
+            None,
         ) {
             Ok(turn_res) => {
                 token_tracker.record(Some(&turn_res.total_usage), &current_model, &turn_res.final_content);
-                println!("\n{}\n", turn_res.final_content);
+                if !streaming {
+                    println!("\n{}\n", turn_res.final_content);
+                }
 
                 // Auto-Writer Safety Net: If code was generated but model didn't call write_file
                 if let Some(note) = auto_save_if_code_generated(trimmed, &turn_res.final_content, turn_res.tools_executed) {
@@ -1148,7 +2167,7 @@ fn start_repl(user_profile: &mut UserProfile) -> Result<()> {
                 let _ = MemoryManager::save_session_history(&conversation);
 
                 if user_profile.show_token_usage {
-                    println!("{}\n", format_token_badge(Some(&turn_res.total_usage), &current_model));
+                    println!("{}\n", format_token_badge(Some(&turn_res.total_usage), &current_model, Some(active_p)));
                 }
             }
             Err(e) => eprintln!("\n❌ Agent Error: {}\n", e),

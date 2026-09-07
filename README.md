@@ -26,9 +26,16 @@ Biner hanya **~1.8 MB** dengan penggunaan RAM yang minimal.
 ### ✨ Fitur Utama
 
 | 🤖 Autonomous Agent | ReAct execution loop otonom untuk inspeksi & eksekusi kode |
-| 🛠️ 9 Built-in Tools | Tools ala `fx` (`read`, `write`, `edit`, `glob`, `grep`, `shell`, dll.) |
+| ⚡ Real-Time Streaming | Streaming respons SSE (`stream: true`) langsung ke terminal |
+| 🩺 Self-Healing Code Loop | Feedback diagnosa compiler otomatis (`cargo check`, python, tsc) untuk perbaikan mandiri |
+| 🔄 Git Checkpoint & Undo | Shadow snapshot file otomatis, inspect `/diff`, & rollback instan via `/undo` |
+| 🧹 Context Compaction | Kompaksi & ringkasan otomatis riwayat sesi untuk cegah token blowout |
+| 🌐 Web Search & Fetch | Built-in `web_fetch` (HTML to Markdown) & `web_search` (DuckDuckGo) |
+| 🔌 MCP Protocol Support | Klien Model Context Protocol (`.ctrl/mcp.json`) untuk memuat tool eksternal |
+| 👥 Subagent Delegation | Delegasi tugas/riset terisolasi ke background subagent via `subagent` |
+| 🛠️ 14 Built-in Tools | Tools lengkap ala `fx` (`read`, `write`, `edit`, `glob`, `grep`, `shell`, `web`, `subagent`, dll.) |
 | 🛡️ Permission Gate | Kebijakan keamanan interaktif (`Ask`, `AutoApprove`, `ReadOnly`) |
-| 🖥️ Mode REPL | Chat interaktif langsung di terminal |
+| 🖥️ Mode REPL | Chat interaktif langsung di terminal dengan autocompletion `/` |
 | ⚡ Mode Generate | Eksekusi tugas & generate kode dari satu baris perintah |
 | 📊 Token & Context | Pantau penggunaan token & kapasitas context window |
 | 🎯 Skill Spesialis | 8 skill built-in + support muat `SKILL.md` lokal |
@@ -141,7 +148,14 @@ Cukup ketik pertanyaan atau permintaan kode, lalu tekan Enter! Di bawah setiap r
 | Perintah | Fungsi |
 |----------|--------|
 | `/` | Buka menu interaktif (pilih perintah dengan panah ↑↓) |
-| `/tools` | Lihat daftar 9 built-in agent tools & status eksekusinya |
+| `/tools` | Lihat daftar 14 built-in agent tools, status eksekusi & MCP bridge |
+| `/undo` | Batalkan (*rollback*) modifikasi file terakhir dari shadow checkpoint |
+| `/diff [file]` | Tampilkan unified diff perubahan berkas terkini atau git diff |
+| `/check [file]` | Jalankan pemeriksaan compiler / linter (*self-healing loop*) |
+| `/compact` | Ringkas (*compact*) riwayat percakapan lama untuk hemat context window |
+| `/mcp` | Lihat status server & tool Model Context Protocol (`.ctrl/mcp.json`) |
+| `/stream` | Toggle output streaming real-time SSE (`on` / `off`) |
+| `/checkpoints` | Tampilkan riwayat snapshot berkas yang tersimpan |
 | `/permissions` | Atur kebijakan izin tool (`Ask`, `AutoApprove`, `ReadOnly`) |
 | `/memory` | Lihat catatan memori jangka panjang proyek (`.ctrl/MEMORY.md`) |
 | `/reset` | Kosongkan riwayat percakapan & memori sesi (mulai konteks baru) |
@@ -162,23 +176,38 @@ Cukup ketik pertanyaan atau permintaan kode, lalu tekan Enter! Di bawah setiap r
 
 ### 🛠️ Built-in Agent Tools & Keamanan
 
-AI Agent di `ctrl-cli` dapat menginspeksi dan memodifikasi proyek secara mandiri melalui 9 perkakas bawaan:
+AI Agent di `ctrl-cli` dapat menginspeksi, menjelajah, dan memodifikasi proyek secara mandiri melalui 14 perkakas bawaan + MCP:
 
 - **`read_file`**: Membaca file dengan dukungan penomoran baris dan offset.
-- **`write_file`**: Menulis file baru atau menimpa file yang sudah ada.
-- **`edit_file`**: Modifikasi kode secara presisi dan bedah (*surgical replacement*).
+- **`write_file`**: Menulis file baru atau menimpa file yang sudah ada (dilengkapi auto checkpoint & self-heal).
+- **`edit_file`**: Modifikasi kode secara presisi dan bedah (*surgical replacement* dengan auto checkpoint & self-heal).
+- **`code_check`**: Menjalankan pengecekan compiler atau sintaks (`cargo check`, `py_compile`, `tsc`).
+- **`web_fetch`**: Mengambil konten web dari URL HTTP(S) dan mengubah HTML menjadi Markdown bersih.
+- **`web_search`**: Mencari solusi pemrograman dan dokumentasi via mesin pencari DuckDuckGo.
+- **`subagent`**: Mendelegasikan tugas atau riset terisolasi ke agen anak (*subagent*) tanpa membebani sesi utama.
 - **`glob_files`**: Menemukan pola file dalam direktori proyek (contoh: `**/*.rs`).
 - **`grep_files`**: Mencari kata kunci/teks di seluruh file dalam workspace.
 - **`shell`**: Menjalankan perintah terminal/shell secara aman.
 - **`read_tool_result`**: Membaca output tool yang terpotong jika terlalu panjang.
 - **`ask_user_question`**: Bertanya dan meminta konfirmasi interaktif ke pengguna.
 - **`skill`**: Memuat instruksi khusus dari berkas `SKILL.md` lokal.
+- **`manage_memory`**: Membaca atau menambahkan memori kerja jangka panjang ke `.ctrl/MEMORY.md`.
+- **`mcp__<server>__<tool>`**: Tool dinamis eksternal yang dimuat otomatis dari Model Context Protocol.
 
 #### 🛡️ Kebijakan Izin (*Permission Modes*)
 Gunakan `/permissions` di REPL untuk memilih mode keamanan:
 1. **`Ask`** *(Default)*: Agent akan meminta izin Anda sebelum menjalankan tool yang mengubah file atau mengeksekusi shell.
 2. **`AutoApprove`**: Mengizinkan semua tool secara otonom tanpa henti (cocok untuk otomasi penuh).
 3. **`ReadOnly`**: Memblokir seluruh eksekusi shell dan operasi mutasi file.
+
+### 🧬 Fitur Canggih ala `fx`
+1. **Self-Healing Code Loop**: Saat file ditulis atau diedit, `ctrl-cli` otomatis memeriksa diagnosa kompilasi. Jika terjadi eror (misal `cargo check`), feedback kesalahan kompilasi langsung diteruskan ke agen agar segera diperbaiki pada giliran berikutnya.
+2. **Git Checkpoint & `/undo` / `/diff`**: Sebelum berkas dimutasi, snapshot bayangan dibuat di `.ctrl/snapshots/`. Kamu bisa mengetik `/diff` untuk melihat perbedaan baris berwarna atau `/undo` untuk mengembalikan berkas ke kondisi semula dengan aman.
+3. **Real-Time Streaming Output**: Teks dan indikator pemikiran (`reasoning`) dialirkan langsung baris demi baris via Server-Sent Events (SSE), sehingga terminal terasa sangat responsif dan bebas jeda tunggu.
+4. **Smart Context Compaction**: Ketika percakapan mendekati 65-70% batas context window atau melebihi 16 putaran, sistem otomatis meringkas giliran lama menjadi satu ringkasan padat tanpa menghilangkan instruksi utama dan file yang aktif.
+5. **Built-in Web Fetch & Search**: Agent dapat menelusuri halaman dokumentasi (`web_fetch`) dan mencari solusi bug via web (`web_search`).
+6. **Model Context Protocol (MCP)**: Konfigurasikan `.ctrl/mcp.json` untuk menghubungkan tool pihak ketiga seperti SQLite, GitHub, browser automation, atau Postgres.
+7. **Background Subagent Delegation**: Tugas riset yang berat atau investigasi dependensi dapat didelegasikan ke `subagent` yang berjalan terisolasi dan hanya mengembalikan kesimpulan akhir ke sesi utama.
 
 ### 🧠 Memori & Auto-Writer
 - **Sesi Otomatis**: Riwayat percakapan tersimpan otomatis di `.ctrl/session.json` dan dipulihkan saat REPL dibuka kembali. Gunakan `/reset` untuk memulai sesi baru.
@@ -232,9 +261,16 @@ Binary size is only **~1.8 MB** with minimal RAM usage.
 | Feature | Description |
 |---------|-------------|
 | 🤖 Autonomous Agent | ReAct loop engine for autonomous code inspection & execution |
-| 🛠️ 9 Built-in Tools | Unix-style tools (`read`, `write`, `edit`, `glob`, `grep`, `shell`, etc.) |
+| ⚡ Real-Time Streaming | Live SSE streaming (`stream: true`) directly into terminal |
+| 🩺 Self-Healing Code Loop | Automated compiler diagnostics feedback (`cargo check`, python, tsc) for self-correction |
+| 🔄 Git Checkpoint & Undo | Shadow file snapshots, unified `/diff` review, & instant rollback via `/undo` |
+| 🧹 Context Compaction | Automatic & manual context compaction to prevent context window blowouts |
+| 🌐 Web Search & Fetch | Built-in `web_fetch` (HTML to clean Markdown) & `web_search` (DuckDuckGo) |
+| 🔌 MCP Protocol Support | Model Context Protocol client (`.ctrl/mcp.json`) for dynamic external tools |
+| 👥 Subagent Delegation | Delegate isolated research and heavy sub-tasks to child agents via `subagent` |
+| 🛠️ 14 Built-in Tools | Full fx-style tool suite (`read`, `write`, `edit`, `glob`, `grep`, `shell`, `web`, `subagent`, etc.) |
 | 🛡️ Permission Gate | Interactive safety policy (`Ask`, `AutoApprove`, `ReadOnly`) |
-| 🖥️ REPL Mode | Interactive chat directly in terminal with autocomplete |
+| 🖥️ REPL Mode | Interactive chat directly in terminal with `/` autocompletion |
 | ⚡ Generate Mode | Execute tasks & generate code from a single CLI command |
 | 📊 Token & Context | Real-time token consumption & context window monitoring |
 | 🎯 Specialist Skills | 8 built-in skills + support for loading local `SKILL.md` |
@@ -333,6 +369,7 @@ After running, you will enter REPL mode:
  🤖 ctrl-cli REPL (AI Coding Agent)
  Active Model: gpt-4o-mini
  Type your prompt and press Enter.
+ Press `/` for interactive autocomplete (navigate with ↑ / ↓).
  Commands: /tokens, /model, /skill, /dev, /profile, /info, /clear, /help, /exit
 ══════════════════════════════════════════════════════════════
 
@@ -346,7 +383,14 @@ Just type your question or code request and press Enter! A token usage badge wil
 | Command | Function |
 |---------|----------|
 | `/` | Open interactive menu (navigate with ↑↓) |
-| `/tools` | List the 9 built-in agent tools & their execution policies |
+| `/tools` | List the 14 built-in agent tools, execution status & MCP bridge |
+| `/undo` | Rollback last file modification from shadow checkpoint |
+| `/diff [file]` | Display colorized unified diff of recent changes or git diff |
+| `/check [file]` | Run compiler / syntax check (*self-healing loop*) |
+| `/compact` | Compact old conversation history to conserve context window |
+| `/mcp` | View Model Context Protocol (`.ctrl/mcp.json`) server & tool status |
+| `/stream` | Toggle real-time SSE output streaming (`on` / `off`) |
+| `/checkpoints` | List recent saved file shadow snapshots |
 | `/permissions` | Configure tool security policy (`Ask`, `AutoApprove`, `ReadOnly`) |
 | `/memory` | Inspect long-term project memory (`.ctrl/MEMORY.md`) |
 | `/reset` | Clear conversation history & session memory (fresh context) |
@@ -367,23 +411,38 @@ Just type your question or code request and press Enter! A token usage badge wil
 
 ### 🛠️ Built-in Agent Tools & Security
 
-The AI agent in `ctrl-cli` can autonomously inspect and modify projects using 9 built-in tools:
+The AI agent in `ctrl-cli` can autonomously inspect and modify projects using 14 built-in tools + MCP:
 
 - **`read_file`**: Read file content with line numbers and offset support.
-- **`write_file`**: Create new files or overwrite existing files.
-- **`edit_file`**: Perform precise surgical code replacements (target -> replacement).
+- **`write_file`**: Create new files or overwrite existing files (with auto-checkpoint & self-heal).
+- **`edit_file`**: Precise surgical code replacements (with auto-checkpoint & self-heal).
+- **`code_check`**: Run compiler or syntax validation (`cargo check`, `py_compile`, `tsc`).
+- **`web_fetch`**: Fetch web pages from HTTP(S) URLs and convert HTML to clean Markdown.
+- **`web_search`**: Search programming documentation and solutions via DuckDuckGo.
+- **`subagent`**: Delegate isolated tasks or research to a child agent loop.
 - **`glob_files`**: Discover files matching wildcard patterns (e.g., `**/*.rs`).
 - **`grep_files`**: Search code and text across the workspace with line numbers.
 - **`shell`**: Safely execute shell commands with stdout/stderr capture.
 - **`read_tool_result`**: Paginate and read long truncated tool results.
 - **`ask_user_question`**: Prompt user interactively for clarification or decisions.
 - **`skill`**: Load specialized guidance from local `SKILL.md` files.
+- **`manage_memory`**: View or append to persistent project memory in `.ctrl/MEMORY.md`.
+- **`mcp__<server>__<tool>`**: Dynamically loaded external tools from Model Context Protocol servers.
 
 #### 🛡️ Permission Modes
 Use `/permissions` in REPL to configure the security level:
 1. **`Ask`** *(Default)*: The agent prompts for your approval before modifying files or executing shell commands.
 2. **`AutoApprove`**: Automatically approves all tool executions (ideal for unattended workflows).
 3. **`ReadOnly`**: Blocks all shell execution and mutating file operations.
+
+### 🧬 Advanced Features (Inspired by `fx`)
+1. **Self-Healing Code Loop**: When files are written or edited, `ctrl-cli` automatically inspects compilation diagnostics. If an error occurs (e.g., `cargo check`), compiler diagnostic feedback is seamlessly returned to the agent to fix immediately in the next turn.
+2. **Git Checkpoint & `/undo` / `/diff`**: Before any file mutation, a shadow snapshot is preserved in `.ctrl/snapshots/`. You can inspect changes with colorized unified diffs via `/diff` or safely roll back any file to its previous state with `/undo`.
+3. **Real-Time Streaming Output**: Text and reasoning deltas are streamed in real-time via Server-Sent Events (SSE), making terminal interactions fluid and zero-latency.
+4. **Smart Context Compaction**: When context nears 65-70% limit or exceeds 16 turns, the agent intelligently condenses older conversation turns into a compact summary preserving key instructions and active files.
+5. **Built-in Web Fetch & Search**: Agent can browse live web documentation (`web_fetch`) and search for bug fixes online (`web_search`).
+6. **Model Context Protocol (MCP)**: Configure `.ctrl/mcp.json` to link external tools such as SQLite, GitHub, browser automation, or PostgreSQL via stdio JSON-RPC.
+7. **Background Subagent Delegation**: Heavy investigation, dependency audits, or auxiliary research can be delegated to isolated child subagents via `subagent`.
 
 ### 🧠 Persistent Memory & Auto-Writer
 - **Automatic Sessions**: Conversation history is persisted in `.ctrl/session.json` and restored across REPL launches. Use `/reset` to start clean.

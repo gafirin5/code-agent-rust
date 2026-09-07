@@ -127,3 +127,40 @@ pub struct ChatResponse {
     pub error: Option<ApiErrorDetail>,
     pub usage: Option<Usage>,
 }
+
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
+pub struct DeltaToolCallFunction {
+    pub name: Option<String>,
+    pub arguments: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
+pub struct DeltaToolCall {
+    pub index: Option<usize>,
+    pub id: Option<String>,
+    #[serde(rename = "type")]
+    pub call_type: Option<String>,
+    pub function: Option<DeltaToolCallFunction>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
+pub struct ChatCompletionStreamDelta {
+    pub role: Option<MessageRole>,
+    pub content: Option<String>,
+    pub reasoning_content: Option<String>,
+    pub tool_calls: Option<Vec<DeltaToolCall>>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct ChatCompletionStreamChoice {
+    pub index: Option<usize>,
+    pub delta: Option<ChatCompletionStreamDelta>,
+    pub finish_reason: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct ChatCompletionStreamChunk {
+    pub id: Option<String>,
+    pub choices: Option<Vec<ChatCompletionStreamChoice>>,
+    pub usage: Option<Usage>,
+}

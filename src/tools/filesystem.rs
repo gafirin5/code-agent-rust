@@ -74,6 +74,9 @@ pub fn write_file(path_str: &str, content: &str, overwrite: Option<bool>) -> Res
         anyhow::bail!("File already exists and overwrite is set to false: '{}'", path_str);
     }
 
+    // Save snapshot checkpoint before modifying
+    let _ = crate::agent::checkpoint::CheckpointManager::record_checkpoint(path_str, "write_file");
+
     if let Some(parent) = path.parent() {
         if !parent.as_os_str().is_empty() {
             std::fs::create_dir_all(parent)
@@ -87,10 +90,19 @@ pub fn write_file(path_str: &str, content: &str, overwrite: Option<bool>) -> Res
     let line_count = content.lines().count();
     let byte_count = content.len();
 
-    Ok(format!(
+    let mut message = format!(
         "Successfully wrote to '{}' ({} lines, {} bytes).",
         path_str, line_count, byte_count
-    ))
+    );
+
+    // Self-Healing Code Loop: Check syntax/compiler diagnostics
+    if let Some(diag) = crate::tools::self_heal::check_file_diagnostics(path_str) {
+        message.push_str("\n\n⚠️ [Compiler Diagnostics Detected - Self-Healing Loop]:\n");
+        message.push_str(&diag);
+        message.push_str("\nPlease review and correct the compiler diagnostics in the next turn.");
+    }
+
+    Ok(message)
 }
 
 pub fn edit_file(
@@ -103,6 +115,9 @@ pub fn edit_file(
     if !path.exists() {
         anyhow::bail!("File not found: '{}'", path_str);
     }
+
+    // Save snapshot checkpoint before modifying
+    let _ = crate::agent::checkpoint::CheckpointManager::record_checkpoint(path_str, "edit_file");
 
     let existing = std::fs::read_to_string(&path)
         .with_context(|| format!("Failed to read file: '{}'", path.display()))?;
@@ -160,8 +175,17 @@ pub fn edit_file(
         format!("{} occurrences", count)
     };
 
-    Ok(format!(
+    let mut message = format!(
         "Successfully edited '{}' (replaced {}).",
         path_str, replaced_str
-    ))
+    );
+
+    // Self-Healing Code Loop: Check syntax/compiler diagnostics
+    if let Some(diag) = crate::tools::self_heal::check_file_diagnostics(path_str) {
+        message.push_str("\n\n⚠️ [Compiler Diagnostics Detected - Self-Healing Loop]:\n");
+        message.push_str(&diag);
+        message.push_str("\nPlease review and correct the compiler diagnostics in the next turn.");
+    }
+
+    Ok(message)
 }

@@ -1,9 +1,12 @@
 pub mod filesystem;
 pub mod interaction;
+pub mod mcp;
 pub mod result_store;
 pub mod search;
+pub mod self_heal;
 pub mod shell;
 pub mod skills;
+pub mod web;
 #[cfg(test)]
 mod tests;
 
@@ -16,7 +19,7 @@ pub fn is_mutating_tool(name: &str) -> bool {
 }
 
 pub fn get_available_tools() -> Vec<ChatCompletionTool> {
-    vec![
+    let mut tools = vec![
         ChatCompletionTool {
             tool_type: "function".to_string(),
             function: FunctionDefinition {
@@ -270,7 +273,127 @@ pub fn get_available_tools() -> Vec<ChatCompletionTool> {
                 }),
             },
         },
-    ]
+        ChatCompletionTool {
+            tool_type: "function".to_string(),
+            function: FunctionDefinition {
+                name: "code_check".to_string(),
+                description: "Run compiler or syntax diagnostic checks (e.g. cargo check, python syntax, tsc) on a specific file or the whole workspace.".to_string(),
+                parameters: json!({
+                    "type": "object",
+                    "properties": {
+                        "target": {
+                            "type": "string",
+                            "description": "Optional file path or directory to check (defaults to checking workspace project)."
+                        }
+                    }
+                }),
+            },
+        },
+        ChatCompletionTool {
+            tool_type: "function".to_string(),
+            function: FunctionDefinition {
+                name: "web_fetch".to_string(),
+                description: "Fetch web content from an HTTP(S) URL and convert HTML into clean readable Markdown text.".to_string(),
+                parameters: json!({
+                    "type": "object",
+                    "properties": {
+                        "url": {
+                            "type": "string",
+                            "description": "The full HTTP/HTTPS URL to fetch."
+                        }
+                    },
+                    "required": ["url"]
+                }),
+            },
+        },
+        ChatCompletionTool {
+            tool_type: "function".to_string(),
+            function: FunctionDefinition {
+                name: "web_search".to_string(),
+                description: "Search the web (via DuckDuckGo) for documentation, programming solutions, and technical references.".to_string(),
+                parameters: json!({
+                    "type": "object",
+                    "properties": {
+                        "query": {
+                            "type": "string",
+                            "description": "The search keywords or question."
+                        },
+                        "num_results": {
+                            "type": "integer",
+                            "description": "Number of search results to return (default: 5, max: 10)."
+                        }
+                    },
+                    "required": ["query"]
+                }),
+            },
+        },
+        ChatCompletionTool {
+            tool_type: "function".to_string(),
+            function: FunctionDefinition {
+                name: "subagent".to_string(),
+                description: "Delegate an isolated research or execution sub-task to an autonomous subagent. Set background=true to run non-blocking and get a task_id for tracking.".to_string(),
+                parameters: json!({
+                    "type": "object",
+                    "properties": {
+                        "task": {
+                            "type": "string",
+                            "description": "The specific mission or investigation prompt for the subagent."
+                        },
+                        "skill": {
+                            "type": "string",
+                            "description": "Optional skill specialization to assign (e.g. 'rust-expert', 'code-reviewer', 'debugger')."
+                        },
+                        "model": {
+                            "type": "string",
+                            "description": "Optional model override for the subagent."
+                        },
+                        "max_turns": {
+                            "type": "integer",
+                            "description": "Maximum tool-call turns for the subagent (default: 8)."
+                        },
+                        "background": {
+                            "type": "boolean",
+                            "description": "If true, run the subagent in the background and return a task_id immediately without blocking (default: false)."
+                        }
+                    },
+                    "required": ["task"]
+                }),
+            },
+        },
+        ChatCompletionTool {
+            tool_type: "function".to_string(),
+            function: FunctionDefinition {
+                name: "manage_task".to_string(),
+                description: "Inspect, await, cancel, or retrieve logs for background tasks spawned by subagent(background=true). Actions: 'list' (all tasks), 'status' (single task with recent logs), 'await' (wait for completion), 'cancel' (stop a running task), 'logs' (get captured task log output).".to_string(),
+                parameters: json!({
+                    "type": "object",
+                    "properties": {
+                        "action": {
+                            "type": "string",
+                            "enum": ["list", "status", "await", "cancel", "logs"],
+                            "description": "Action to perform on background tasks."
+                        },
+                        "task_id": {
+                            "type": "string",
+                            "description": "The task ID to query/await/cancel/fetch logs (required for 'status', 'await', 'cancel', 'logs')."
+                        },
+                        "timeout_secs": {
+                            "type": "integer",
+                            "description": "Optional timeout in seconds for 'await' action (default: no timeout)."
+                        },
+                        "limit": {
+                            "type": "integer",
+                            "description": "Optional maximum number of log lines to retrieve for 'logs' action (default: 100)."
+                        }
+                    },
+                    "required": ["action"]
+                }),
+            },
+        },
+    ];
+
+    tools.extend(mcp::McpManager::get_all_tools());
+    tools
 }
 
 pub fn dispatch_tool(name: &str, arguments_json: &str) -> Result<String> {
@@ -340,6 +463,192 @@ pub fn dispatch_tool(name: &str, arguments_json: &str) -> Result<String> {
             let content = args["content"].as_str().unwrap_or("");
             crate::agent::memory::MemoryManager::save_long_term_memory(action, content)
         }
-        _ => anyhow::bail!("Unknown tool: '{}'", name),
+        "code_check" => {
+            let target = args["target"].as_str();
+            self_heal::run_code_check(target)
+        }
+        "web_fetch" => {
+            let url = args["url"].as_str().context("Missing 'url' argument")?;
+            web::web_fetch(url)
+        }
+        "web_search" => {
+            let query = args["query"].as_str().context("Missing 'query' argument")?;
+            let num = args["num_results"].as_u64().map(|n| n as usize);
+            web::web_search(query, num)
+        }
+        "subagent" => {
+            let task = args["task"].as_str().context("Missing 'task' argument")?;
+            let skill = args["skill"].as_str();
+            let model = args["model"].as_str();
+            let max_turns = args["max_turns"].as_u64().map(|n| n as usize);
+            let background = args["background"].as_bool().unwrap_or(false);
+            let api_key = std::env::var("AI_API_KEY").unwrap_or_default();
+            let base_url = std::env::var("AI_BASE_URL").unwrap_or_else(|_| "https://api.openai.com/v1".to_string());
+            let default_model = std::env::var("AI_MODEL").unwrap_or_else(|_| "gpt-4o-mini".to_string());
+            if background {
+                crate::agent::subagent::run_subagent_background(task, skill, model, max_turns, &api_key, &base_url, &default_model)
+            } else {
+                crate::agent::subagent::run_subagent(task, skill, model, max_turns, &api_key, &base_url, &default_model)
+            }
+        }
+        "manage_task" => {
+            let action = args["action"].as_str().context("Missing 'action' argument")?;
+            let task_id = args["task_id"].as_str();
+            let timeout_secs = args["timeout_secs"].as_u64();
+            let limit = args["limit"].as_u64().map(|n| n as usize);
+            dispatch_manage_task(action, task_id, timeout_secs, limit)
+        }
+        _ => {
+            if mcp::McpManager::is_mcp_tool(name) {
+                mcp::McpManager::dispatch(name, arguments_json)
+            } else {
+                anyhow::bail!("Unknown tool: '{}'", name)
+            }
+        }
+    }
+}
+
+/// Dispatches manage_task actions against the global TaskManager.
+fn dispatch_manage_task(
+    action: &str,
+    task_id: Option<&str>,
+    timeout_secs: Option<u64>,
+    limit: Option<usize>,
+) -> Result<String> {
+    use crate::agent::tasks::TaskManager;
+    let tm = TaskManager::global();
+
+    match action {
+        "list" => {
+            let snapshots = tm.list_tasks();
+            if snapshots.is_empty() {
+                return Ok("No background tasks found.".to_string());
+            }
+            let mut out = format!("Background Tasks ({} total):\n\n", snapshots.len());
+            for snap in &snapshots {
+                out.push_str(&format!(
+                    "  {} {} — {} ({})\n",
+                    snap.status.badge(),
+                    snap.id,
+                    snap.name,
+                    snap.elapsed_human
+                ));
+                if !snap.description.is_empty() {
+                    out.push_str(&format!("      {}\n", snap.description));
+                }
+            }
+            Ok(out)
+        }
+        "status" => {
+            let id = task_id.context("'task_id' is required for 'status' action")?;
+            match tm.get_task(id) {
+                Some(snap) => {
+                    let mut out = format!(
+                        "Task: {}\nName: {}\nStatus: {}\nElapsed: {}\nCreated: {}\n",
+                        snap.id, snap.name, snap.status.as_str(), snap.elapsed_human, snap.created_at
+                    );
+                    if let Some(ref started) = snap.started_at {
+                        out.push_str(&format!("Started: {}\n", started));
+                    }
+                    if let Some(ref finished) = snap.finished_at {
+                        out.push_str(&format!("Finished: {}\n", finished));
+                    }
+                    if let Some(ref result) = snap.result {
+                        let preview = if result.len() > 500 {
+                            format!("{}...\n(truncated, {} chars total)", &result[..497], result.len())
+                        } else {
+                            result.clone()
+                        };
+                        out.push_str(&format!("\nResult:\n{}\n", preview));
+                    }
+                    if let Some(ref error) = snap.error {
+                        out.push_str(&format!("\nError: {}\n", error));
+                    }
+
+                    // Retrieve captured logs from TaskLogBuffer
+                    if let Some(logs) = tm.get_task_logs(id) {
+                        if !logs.is_empty() {
+                            let total = logs.len();
+                            let max_lines = 15;
+                            let start = if total > max_lines { total - max_lines } else { 0 };
+                            out.push_str(&format!("\nRecent Logs (showing {} of {} lines):\n", total - start, total));
+                            for line in &logs[start..] {
+                                out.push_str(&format!("  {}\n", line));
+                            }
+                            if start > 0 {
+                                out.push_str(&format!("  ... ({} earlier lines omitted)\n", start));
+                            }
+                        } else {
+                            out.push_str("\nLogs: (none recorded)\n");
+                        }
+                    }
+
+                    Ok(out)
+                }
+                None => Ok(format!("Task '{}' not found.", id)),
+            }
+        }
+        "logs" => {
+            let id = task_id.context("'task_id' is required for 'logs' action")?;
+            match tm.get_task(id) {
+                Some(snap) => {
+                    match tm.get_task_logs(id) {
+                        Some(logs) => {
+                            if logs.is_empty() {
+                                Ok(format!("Task '{}' has no recorded logs (status: {}).", id, snap.status.as_str()))
+                            } else {
+                                let max_lines = limit.unwrap_or(100);
+                                let total = logs.len();
+                                let start = if total > max_lines { total - max_lines } else { 0 };
+                                let mut out = format!(
+                                    "Task '{}' Logs (showing {} of {} lines, status: {}):\n",
+                                    id,
+                                    total - start,
+                                    total,
+                                    snap.status.as_str()
+                                );
+                                for line in &logs[start..] {
+                                    out.push_str(&format!("  {}\n", line));
+                                }
+                                if start > 0 {
+                                    out.push_str(&format!("  ... ({} earlier lines omitted)\n", start));
+                                }
+                                Ok(out)
+                            }
+                        }
+                        None => Ok(format!("No log buffer found for task '{}'.", id)),
+                    }
+                }
+                None => Ok(format!("Task '{}' not found.", id)),
+            }
+        }
+        "await" => {
+            let id = task_id.context("'task_id' is required for 'await' action")?;
+            let timeout = timeout_secs.map(std::time::Duration::from_secs);
+            match tm.await_task(id, timeout) {
+                Ok(snap) => {
+                    let mut out = format!(
+                        "Task {} finished.\nStatus: {}\nElapsed: {}\n",
+                        snap.id, snap.status.as_str(), snap.elapsed_human
+                    );
+                    if let Some(ref result) = snap.result {
+                        out.push_str(&format!("\nResult:\n{}\n", result));
+                    }
+                    if let Some(ref error) = snap.error {
+                        out.push_str(&format!("\nError: {}\n", error));
+                    }
+                    Ok(out)
+                }
+                Err(e) => Ok(format!("Await failed: {}", e)),
+            }
+        }
+        "cancel" => {
+            let id = task_id.context("'task_id' is required for 'cancel' action")?;
+            match tm.cancel_task(id) {
+                Ok(()) => Ok(format!("Task '{}' has been cancelled.", id)),
+                Err(e) => Ok(format!("Cancel failed: {}", e)),
+            }
+        }
+        _ => anyhow::bail!("Unknown manage_task action: '{}'. Valid: list, status, await, cancel, logs", action),
     }
 }
