@@ -20,672 +20,634 @@
 
 ## 🇮🇩 Bahasa Indonesia
 
-### Apa itu ctrl-cli?
+### 💡 Apa itu ctrl-cli?
 
-**ctrl-cli** adalah agen coding AI yang sangat ringan, dibangun dengan Rust murni. Kamu bisa langsung chat dengan AI dari terminal, ganti model, aktifkan skill spesialis, semuanya tanpa perlu browser!
+**`ctrl-cli`** adalah asisten coding AI di terminal kamu — mirip seperti *Claude Code* atau *Cursor CLI*, tetapi dirancang **super ringan (~1.8 MB)** dengan performa tinggi menggunakan bahasa **Rust murni**.
 
-Biner hanya **~1.8 MB** dengan penggunaan RAM yang minimal.
+Kamu tidak perlu membuka browser atau aplikasi berat:
+- 💬 **Tanya Jawab & Diskusi Kode**: Ngobrol langsung dari terminal layaknya *pair programming*.
+- 🛠️ **Bisa Baca & Edit Proyek Mandiri**: Agent bisa membaca struktur folder, mengedit file secara presisi, dan menjalankan terminal.
+- 🩺 **Bisa Memperbaiki Error Sendiri (Self-Healing)**: Setelah menulis kode, agent mengecek hasil kompilasi compiler (`cargo check`, python, tsc) dan langsung membetulkan kodenya jika ada error.
+- 🛡️ **Aman & Anti-Panik**: Sebelum mengubah file, sistem membuat salinan otomatis (*snapshot*). Jika kamu tidak suka perubahannya, cukup ketik `/undo` untuk kembali seperti semula!
+- 🌐 **Cari Solusi di Web**: Terintegrasi langsung dengan mesin pencari DuckDuckGo untuk melihat dokumentasi atau solusi error terkini.
+- 🔌 **Bebas Pilih Model AI**: Mau yang gratis dan super cepat (Groq), model lokal offline (Ollama), atau model canggih (OpenAI GPT-4o, DeepSeek, Claude 3.5 Sonnet).
 
-### ✨ Fitur Utama
+---
 
-| 🤖 Autonomous Agent | ReAct execution loop otonom untuk inspeksi & eksekusi kode |
-| ⚡ Real-Time Streaming | Streaming respons SSE (`stream: true`) langsung ke terminal |
-| 🩺 Self-Healing Code Loop | Feedback diagnosa compiler otomatis (`cargo check`, python, tsc) untuk perbaikan mandiri |
-| 🔄 Git Checkpoint & Undo | Shadow snapshot file otomatis, inspect `/diff`, & rollback instan via `/undo` |
-| 🧹 Context Compaction | Kompaksi & ringkasan otomatis riwayat sesi untuk cegah token blowout |
-| 🌐 Web Search & Fetch | Built-in `web_fetch` (HTML to Markdown) & `web_search` (DuckDuckGo) |
-| 🔌 MCP Protocol Support | Klien Model Context Protocol (`.ctrl/mcp.json`) untuk memuat tool eksternal |
-| 👥 Subagent Delegation | Delegasi tugas/riset terisolasi ke background subagent via `subagent` |
-| 🛠️ 14 Built-in Tools | Tools lengkap ala `fx` (`read`, `write`, `edit`, `glob`, `grep`, `shell`, `web`, `subagent`, dll.) |
-| 🛡️ Permission Gate | Kebijakan keamanan interaktif (`Ask`, `AutoApprove`, `ReadOnly`) |
-| 🖥️ Mode REPL | Chat interaktif langsung di terminal dengan autocompletion `/` |
-| ⚡ Mode Generate | Eksekusi tugas & generate kode dari satu baris perintah |
-| 📊 Token & Context | Pantau penggunaan token & kapasitas context window |
-| 🎯 Skill Spesialis | 8 skill built-in + support muat `SKILL.md` lokal |
-| 🔄 Ganti Model | Beralih antar model AI kapan saja di REPL |
-| 🔌 Multi-Provider | Support OpenAI, DeepSeek, Groq, OpenRouter, dll. |
-| 👤 User Profile | Personalisasi nama, tech stack, bahasa respons |
-| 📦 Biner Kecil | ~2.0 MB, LTO optimized, siap jalan tanpa install |
+### ⚡ 3 Langkah Cepat Memulai (Quick Start)
 
-### 📚 Dokumentasi Lengkap
-Pelajari dokumentasi teknis dan panduan operasional di folder [`docs/`](../docs/README.md):
-- 📝 [**Catatan Update & Changelog**](../docs/UPDATE_NOTES.md)
-- ⚙️ [**Panduan Konfigurasi**](../docs/CONFIGURATION.md)
-- 🏗️ [**Arsitektur Sistem & Concurrency**](../docs/ARCHITECTURE.md)
-- 🤖 [**Buku Panduan AI Agent**](../docs/AI_AGENT_GUIDE.md)
-- 🛠️ [**Referensi Tool Lengkap**](../docs/TOOLS_REFERENCE.md)
-
-### 🎯 Skill yang Tersedia
-
-| Skill ID | Nama | Kegunaan |
-|----------|------|----------|
-| `rust-expert` | 🦀 Rust Expert | Kode Rust idiomatik & memory-safe |
-| `code-reviewer` | 🔍 Code Reviewer | Audit bug, keamanan & code smell |
-| `web-frontend` | 🎨 Web Frontend UI/UX | HTML/CSS/Tailwind modern & responsif |
-| `api-architect` | 🏗️ API & Backend Architect | Desain REST/GraphQL, database, auth |
-| `security-auditor` | 🛡️ Security Auditor | OWASP Top 10, mitigasi exploit |
-| `debugger` | 🐞 Debugger & Trace Doctor | Analisis error & stack trace |
-| `test-engineer` | 🧪 Test Engineer & TDD | Unit test, integration test, mock |
-| `refactor` | 🧹 Clean Code & Refactoring | SOLID, DRY, arsitektur modular |
-
-### 🚀 Cara Memulai
-
-#### 1. Prasyarat
-
-- [Rust](https://rustup.rs/) (edisi 2021+)
-- API key dari salah satu provider AI berikut:
-  - [OpenAI](https://platform.openai.com/)
-  - [DeepSeek](https://platform.deepseek.com/)
-  - [Groq](https://console.groq.com/)
-  - [OpenRouter](https://openrouter.ai/)
-
-#### 2. Clone & Setup
-
+#### 1. Pasang & Buka Folder
+Pastikan komputer kamu sudah terpasang [Rust](https://rustup.rs/) (versi 2021+), lalu:
 ```bash
 git clone https://github.com/gafirin5/code-agent-rust.git
 cd code-agent-rust
+```
 
-# Salin file konfigurasi
+#### 2. Buat File Konfigurasi `.env`
+Salin template konfigurasi:
+```bash
+# Di Windows (CMD / PowerShell):
 copy .env.example .env
+
+# Di Linux / macOS:
+cp .env.example .env
 ```
 
-#### 3. Isi File `.env`
-
-Buka file `.env` dan isi konfigurasi:
+Buka file `.env` dan masukkan API Key dari provider pilihanmu:
 
 ```env
-# API Key dari provider pilihanmu (wajib diisi)
-AI_API_KEY=sk-xxxxxxxxxxxxxxxx
-
-# Base URL provider (opsional, default: OpenAI)
-AI_BASE_URL=https://api.openai.com/v1
-
-# Nama model (opsional, default: gpt-4o-mini)
-AI_MODEL=gpt-4o-mini
-```
-
-**Contoh provider lain:**
-
-```env
-# DeepSeek
-AI_BASE_URL=https://api.deepseek.com/v1
-AI_MODEL=deepseek-chat
-
-# Groq (gratis & cepat)
+# Contoh 1: Pakai Groq (Gratis & Sangat Cepat!)
+AI_API_KEY=gsk_xxxxxxxxxxxxxxxxxxxxxx
 AI_BASE_URL=https://api.groq.com/openai/v1
 AI_MODEL=llama-3.3-70b-versatile
 
-# OpenRouter
-AI_BASE_URL=https://openrouter.ai/api/v1
-AI_MODEL=anthropic/claude-3.5-sonnet
+# Contoh 2: Pakai OpenAI
+# AI_API_KEY=sk-xxxxxxxxxxxxxxxxxxxxxx
+# AI_BASE_URL=https://api.openai.com/v1
+# AI_MODEL=gpt-4o-mini
+
+# Contoh 3: Pakai DeepSeek
+# AI_API_KEY=sk-xxxxxxxxxxxxxxxxxxxxxx
+# AI_BASE_URL=https://api.deepseek.com/v1
+# AI_MODEL=deepseek-chat
+
+# Contoh 4: Pakai Ollama Lokal (100% Offline & Gratis, tanpa API Key)
+# AI_API_KEY=ollama
+# AI_BASE_URL=http://localhost:11434/v1
+# AI_MODEL=qwen2.5-coder:7b
 ```
 
-#### 4. Build & Jalankan
-
+#### 3. Jalankan Aplikasi!
 ```bash
-# Build release (sekali saja)
-cargo build --release
-
-# Jalankan REPL interaktif
-./target/release/ctrl-cli
-
-# Atau langsung generate kode
-./target/release/ctrl-cli generate "buat fungsi quicksort di Rust"
-
-# Generate kode dengan metrik token & context window
-./target/release/ctrl-cli generate -t "buat fungsi quicksort di Rust"
+# Jalankan langsung dalam mode interaktif (REPL):
+cargo run
 ```
+*Selesai! Terminal siap menerima perintah kode pertamamu.* 🎉
 
-### 💬 Cara Pakai REPL
+---
 
-Setelah dijalankan, kamu akan masuk ke mode REPL:
+### 🎮 4 Cara Menggunakan ctrl-cli
 
-```
-══════════════════════════════════════════════════════════════
- 🤖 ctrl-cli REPL (AI Coding Agent)
- Active Model: gpt-4o-mini
- Type your prompt and press Enter.
- Ketik `/` untuk rekomendasi interaktif (geser panah ↑ / ↓).
- Commands: /tokens, /model, /skill, /dev, /profile, /info, /clear, /help, /exit
-══════════════════════════════════════════════════════════════
+Pilihlah gaya penggunaan yang paling nyaman untukmu:
 
-[gpt-4o-mini] ➜ 
-```
-
-Cukup ketik pertanyaan atau permintaan kode, lalu tekan Enter! Di bawah setiap respon, badge token akan muncul otomatis (misal: `📊 [Tokens: 120 in + 350 out = 470 total | Context: 0.37% of 128k]`).
-
-### ⌨️ Slash Commands
-
-| Perintah | Fungsi |
-|----------|--------|
-| `/` | Buka menu interaktif (pilih perintah dengan panah ↑↓) |
-| `/tools` | Lihat daftar 14 built-in agent tools, status eksekusi & MCP bridge |
-| `/undo` | Batalkan (*rollback*) modifikasi file terakhir dari shadow checkpoint |
-| `/diff [file]` | Tampilkan unified diff perubahan berkas terkini atau git diff |
-| `/check [file]` | Jalankan pemeriksaan compiler / linter (*self-healing loop*) |
-| `/compact` | Ringkas (*compact*) riwayat percakapan lama untuk hemat context window |
-| `/mcp` | Lihat status server & tool Model Context Protocol (`.ctrl/mcp.json`) |
-| `/stream` | Toggle output streaming real-time SSE (`on` / `off`) |
-| `/checkpoints` | Tampilkan riwayat snapshot berkas yang tersimpan |
-| `/permissions` | Atur kebijakan izin tool (`Ask`, `AutoApprove`, `ReadOnly`) |
-| `/memory` | Lihat catatan memori jangka panjang proyek (`.ctrl/MEMORY.md`) |
-| `/reset` | Kosongkan riwayat percakapan & memori sesi (mulai konteks baru) |
-| `/save [file]` | Simpan kode respon terakhir langsung ke file (auto-detect nama file) |
-| `/tokens` | Cek statistik token (in/out/total) & batas context window |
-| `/tokens toggle` | Aktifkan/nonaktifkan badge token otomatis setelah respon |
-| `/model` | Pilih model AI dari daftar interaktif |
-| `/model <nama>` | Ganti model langsung (contoh: `/model deepseek-chat`) |
-| `/skill` | Pilih skill spesialis dari daftar |
-| `/skill <id>` | Aktifkan skill tertentu (contoh: `/skill rust-expert`) |
-| `/skill reset` | Nonaktifkan skill, kembali ke General Assistant |
-| `/profile` | Lihat profil developer aktif |
-| `/dev` | Informasi pembuat & pengembang aplikasi |
-| `/info` | Cek endpoint, model aktif, context window & total token sesi |
-| `/clear` | Bersihkan layar terminal |
-| `/help` | Tampilkan bantuan |
-| `/exit` | Keluar dari REPL |
-
-### 🛠️ Built-in Agent Tools & Keamanan
-
-AI Agent di `ctrl-cli` dapat menginspeksi, menjelajah, dan memodifikasi proyek secara mandiri melalui 14 perkakas bawaan + MCP:
-
-- **`read_file`**: Membaca file dengan dukungan penomoran baris dan offset.
-- **`write_file`**: Menulis file baru atau menimpa file yang sudah ada (dilengkapi auto checkpoint & self-heal).
-- **`edit_file`**: Modifikasi kode secara presisi dan bedah (*surgical replacement* dengan auto checkpoint & self-heal).
-- **`code_check`**: Menjalankan pengecekan compiler atau sintaks (`cargo check`, `py_compile`, `tsc`).
-- **`web_fetch`**: Mengambil konten web dari URL HTTP(S) dan mengubah HTML menjadi Markdown bersih.
-- **`web_search`**: Mencari solusi pemrograman dan dokumentasi via mesin pencari DuckDuckGo.
-- **`subagent`**: Mendelegasikan tugas atau riset terisolasi ke agen anak (*subagent*) tanpa membebani sesi utama.
-- **`glob_files`**: Menemukan pola file dalam direktori proyek (contoh: `**/*.rs`).
-- **`grep_files`**: Mencari kata kunci/teks di seluruh file dalam workspace.
-- **`shell`**: Menjalankan perintah terminal/shell secara aman.
-- **`read_tool_result`**: Membaca output tool yang terpotong jika terlalu panjang.
-- **`ask_user_question`**: Bertanya dan meminta konfirmasi interaktif ke pengguna.
-- **`skill`**: Memuat instruksi khusus dari berkas `SKILL.md` lokal.
-- **`manage_memory`**: Membaca atau menambahkan memori kerja jangka panjang ke `.ctrl/MEMORY.md`.
-- **`mcp__<server>__<tool>`**: Tool dinamis eksternal yang dimuat otomatis dari Model Context Protocol.
-
-#### 🛡️ Kebijakan Izin (*Permission Modes*)
-Gunakan `/permissions` di REPL untuk memilih mode keamanan:
-1. **`Ask`** *(Default)*: Agent akan meminta izin Anda sebelum menjalankan tool yang mengubah file atau mengeksekusi shell.
-2. **`AutoApprove`**: Mengizinkan semua tool secara otonom tanpa henti (cocok untuk otomasi penuh).
-3. **`ReadOnly`**: Memblokir seluruh eksekusi shell dan operasi mutasi file.
-
-### 🧬 Fitur Canggih ala `fx`
-1. **Self-Healing Code Loop**: Saat file ditulis atau diedit, `ctrl-cli` otomatis memeriksa diagnosa kompilasi. Jika terjadi eror (misal `cargo check`), feedback kesalahan kompilasi langsung diteruskan ke agen agar segera diperbaiki pada giliran berikutnya.
-2. **Git Checkpoint & `/undo` / `/diff`**: Sebelum berkas dimutasi, snapshot bayangan dibuat di `.ctrl/snapshots/`. Kamu bisa mengetik `/diff` untuk melihat perbedaan baris berwarna atau `/undo` untuk mengembalikan berkas ke kondisi semula dengan aman.
-3. **Real-Time Streaming Output**: Teks dan indikator pemikiran (`reasoning`) dialirkan langsung baris demi baris via Server-Sent Events (SSE), sehingga terminal terasa sangat responsif dan bebas jeda tunggu.
-4. **Smart Context Compaction**: Ketika percakapan mendekati 65-70% batas context window atau melebihi 16 putaran, sistem otomatis meringkas giliran lama menjadi satu ringkasan padat tanpa menghilangkan instruksi utama dan file yang aktif.
-5. **Built-in Web Fetch & Search**: Agent dapat menelusuri halaman dokumentasi (`web_fetch`) dan mencari solusi bug via web (`web_search`).
-6. **Model Context Protocol (MCP)**: Konfigurasikan `.ctrl/mcp.json` untuk menghubungkan tool pihak ketiga seperti SQLite, GitHub, browser automation, atau Postgres.
-7. **Background Subagent Delegation**: Tugas riset yang berat atau investigasi dependensi dapat didelegasikan ke `subagent` yang berjalan terisolasi dan hanya mengembalikan kesimpulan akhir ke sesi utama.
-
-### 🧠 Memori & Auto-Writer
-- **Sesi Otomatis**: Riwayat percakapan tersimpan otomatis di `.ctrl/session.json` dan dipulihkan saat REPL dibuka kembali. Gunakan `/reset` untuk memulai sesi baru.
-- **Long-Term Memory**: Catatan proyek persisten disimpan di `.ctrl/MEMORY.md` dan dimuat otomatis ke *system prompt*.
-- **Auto-Writer Safety Net**: Jika AI menghasilkan blok kode lengkap saat diminta membuat halaman/file tetapi lupa memanggil `write_file`, sistem akan otomatis mendeteksi nama file dan menyimpannya langsung ke direktori Anda.
-
-### 🔧 Cara Pakai Mode Generate
-
+#### 1. 💬 Mode Chat Interaktif (REPL) — *Paling Populer*
+Ketik langsung pertanyaan atau perintah di terminal:
 ```bash
-# Generate kode biasa
-ctrl-cli generate "buat struct linked list di Rust"
+cargo run
+```
+Tampilan terminal:
+```text
+══════════════════════════════════════════════════════════════
+ 🤖 ctrl-cli REPL (AI Coding Agent v0.3.0)
+ Active Model: llama-3.3-70b-versatile
+ Ketik pertanyaanmu lalu tekan Enter.
+ Ketik `/` untuk melihat menu perintah cepat.
+══════════════════════════════════════════════════════════════
 
-# Simpan langsung ke file (-o atau --output) tanpa membanjiri chat terminal
-ctrl-cli generate -o index.html "buat website html landing page responsif"
-
-# Menampilkan metrik token & context window (-t atau --tokens)
-ctrl-cli generate -t "buat struct linked list di Rust"
-
-# Dengan skill spesifik
-ctrl-cli generate --skill rust-expert "implementasi binary search tree"
-
-# Dengan model spesifik
-ctrl-cli generate --model deepseek-chat "refactor kode ini agar lebih clean"
+[llama-3.3-70b] ➜ Buatkan fungsi validasi email di Rust lengkap dengan unit test-nya
 ```
 
-### 👤 Personalisasi Profil
+#### 2. 🌐 Mode Web Dashboard (Tampilan Browser) — *Baru di v0.3.0!*
+Lebih suka tampilan visual di browser? Cukup jalankan:
+```bash
+cargo run -- serve
+```
+Lalu buka browser di: **`http://127.0.0.1:3000`**. Kamu bisa chatting dengan AI melalui antarmuka web modern lengkap dengan editor kode dan task board!
 
-Profil disimpan di `~/.ctrl-cli/profile.json`. Edit file tersebut untuk menyesuaikan:
+#### 3. 🖥️ Mode TUI Fullscreen (Terminal Visual) — *Baru di v0.3.0!*
+Untuk kamu penggemar terminal ala *Vim/Neovim/Htop*:
+```bash
+cargo run -- --tui
+```
+Menampilkan dashboard fullscreen di terminal dengan panel chat, daftar file, dan status task.
 
+#### 4. ⚡ Mode Satu Baris (Generate One-Shot)
+Jalankan tugas singkat langsung dari satu baris terminal tanpa masuk ke REPL:
+```bash
+# Tanya / minta kode singkat
+cargo run -- generate "bagaimana cara membaca file baris demi baris di Rust?"
+
+# Simpan langsung hasilnya ke file baru tanpa ribet copy-paste
+cargo run -- generate -o salam.py "buat script python untuk menyapa pengguna sesuai waktu"
+
+# Jalankan dengan persona spesialis
+cargo run -- --skill rust-expert generate "buatkan arsitektur concurrency thread-safe"
+```
+
+---
+
+### 🛡️ Fitur Keamanan: Bebas Khawatir dari Kesalahan Kode!
+
+Banyak orang takut AI mengubah file sembarangan. `ctrl-cli` dilengkapi sistem proteksi berlapis:
+
+1. **Auto-Snapshot & `/undo`**:
+   Setiap kali agent akan mengedit file, sistem otomatis menyimpan salinan cadangan (*checkpoint*) di folder `.ctrl/snapshots/`.
+   - Ketik `/diff` untuk melihat perbedaan baris berwarna yang diubah.
+   - Ketik `/undo` jika kodenya salah, dan file akan **seketika kembali ke kondisi sebelum diedit**.
+2. **Izin Akses Interaktif (`/permissions`)**:
+   - **`Ask` (Bawaan)**: AI akan selalu minta persetujuanmu `[Y/n]` sebelum menyentuh file atau mengeksekusi shell.
+   - **`AutoApprove`**: Untuk kamu yang ingin AI bekerja otomatis penuh tanpa henti.
+   - **`ReadOnly`**: Mode aman 100%, AI hanya diizinkan membaca file dan dilarang mengubah apapun.
+3. **Self-Healing Code Loop**:
+   Jika AI membuat kode yang error kompilasi, `ctrl-cli` akan menangkap log error compiler (`cargo check`, python compiler, TypeScript), lalu memberikannya kembali ke AI agar langsung diperbaiki saat itu juga.
+
+---
+
+### ⌨️ Menu Perintah Cepat (Slash Commands)
+
+Saat berada di dalam REPL, cukup ketik `/` lalu tekan tombol panah `↑`/`↓` pada keyboard untuk memilih perintah:
+
+| Kategori | Perintah | Fungsi & Kegunaan |
+|----------|----------|-------------------|
+| **Paling Sering Digunakan** | `/help` | Menampilkan panduan bantuan lengkap |
+| | `/clear` | Membersihkan layar terminal |
+| | `/exit` | Keluar dari aplikasi |
+| **Kontrol File & Kode** | `/undo` | ⏪ **Batalkan perubahan file terakhir** (kembali ke snapshot sebelumnya) |
+| | `/diff [file]` | 🔍 Tampilkan perbandingan baris yang baru saja diubah |
+| | `/check [file]` | 🩺 Jalankan compiler/linter untuk memastikan kode tidak error |
+| | `/save [file]` | 💾 Simpan potongan kode terakhir langsung ke file |
+| | `/tools` | 🛠️ Lihat daftar 14 perkakas bawaan yang bisa dipakai agent |
+| **Pengaturan AI & Model** | `/model` | Ganti model AI (misal pindah ke GPT-4o atau DeepSeek) |
+| | `/skill` | Aktifkan persona ahli (Rust, Reviewer, Frontend, Backend, dll.) |
+| | `/tokens` | Cek sisa kuota context window & penggunaan token |
+| | `/compact` | 🧹 Ringkas percakapan lama agar hemat biaya token |
+| | `/stream` | Nyalakan/matikan efek ketikan real-time (*streaming*) |
+| | `/permissions` | Ubah izin eksekusi (`Ask`, `AutoApprove`, `ReadOnly`) |
+| | `/reset` | Hapus riwayat sesi lama dan mulai topik obrolan baru |
+
+---
+
+### 🎯 Skill Spesialis Bawaan
+
+Kamu bisa mengaktifkan "topi keahlian" khusus untuk agent dengan perintah `/skill <nama>`:
+
+| Skill | Fokus & Keahlian |
+|-------|------------------|
+| `rust-expert` | 🦀 Kode Rust idiomatik, zero-cost abstractions, dan memory-safe |
+| `code-reviewer` | 🔍 Audit bug, celah keamanan, dan saran clean code |
+| `web-frontend` | 🎨 Desain antarmuka HTML/CSS/Tailwind modern dan responsif |
+| `api-architect` | 🏗️ Arsitektur REST/GraphQL API, skema database, dan autentikasi |
+| `security-auditor` | 🛡️ Pemeriksaan celah keamanan OWASP Top 10 dan sanitasi input |
+| `debugger` | 🐞 Analisis stack trace error dan pelacakan akar masalah bug |
+| `test-engineer` | 🧪 Pembuatan unit test, integration test, dan skenario pengujian TDD |
+| `refactor` | 🧹 Pembersihan kode kusut (Clean Code, SOLID, DRY) |
+
+---
+
+### 🛠️ Apa Saja yang Bisa Dilakukan Agent?
+
+Agent di `ctrl-cli` dibekali 14 perkakas (*tools*) bawaan untuk bekerja seperti developer profesional:
+- 📖 **`read_file`**: Membaca isi file dengan cepat dan terstruktur.
+- ✍️ **`write_file` & `edit_file`**: Menulis dan mengubah file dengan presisi tinggi + auto backup.
+- 🔎 **`glob_files` & `grep_files`**: Mencari nama file atau kata kunci tertentu di seluruh proyek.
+- 💻 **`shell`**: Menjalankan perintah terminal (misal `cargo build`, `npm test`, dll.).
+- 🌐 **`web_search` & `web_fetch`**: Mencari solusi di DuckDuckGo dan membaca dokumentasi web.
+- 👥 **`subagent`**: Menugaskan agen anak di latar belakang untuk meriset hal rumit tanpa mengotori chat utama.
+- 🧠 **`manage_memory`**: Menyimpan catatan penting proyek di `.ctrl/MEMORY.md` agar AI tidak lupa konteks.
+- 🔌 **`mcp`**: Mendukung Model Context Protocol untuk integrasi tool eksternal (GitHub, Database, dll.).
+
+---
+
+### 👤 Profil Personal Kamu
+
+Ingin AI memanggil namamu atau selalu membalas dengan gaya tertentu? Edit file `~/.ctrl-cli/profile.json`:
 ```json
 {
-  "name": "namamu",
-  "tech_stack": ["Python", "TypeScript", "Rust"],
+  "name": "Budi",
+  "tech_stack": ["Rust", "Python", "TypeScript"],
   "response_language": "Bahasa Indonesia",
-  "coding_style": "Tulis kode yang bersih, modern, dan efisien."
+  "coding_style": "Tulis kode yang bersih, mudah dibaca, dan berikan penjelasan singkat."
 }
 ```
+
+---
+
+### 📚 Dokumentasi Lengkap
+Ingin mempelajari arsitektur atau konfigurasi lebih dalam? Kunjungi folder [**`docs/`**](../docs/README.md):
+- 📝 [Catatan Rilis & Update v0.3.0](../docs/UPDATE_NOTES.md)
+- ⚙️ [Panduan Konfigurasi Lengkap](../docs/CONFIGURATION.md)
+- 🏗️ [Arsitektur Sistem & Concurrency](../docs/ARCHITECTURE.md)
+- 🤖 [Buku Panduan AI Agent](../docs/AI_AGENT_GUIDE.md)
+- 🛠️ [Referensi Tool Lengkap](../docs/TOOLS_REFERENCE.md)
+
 
 ---
 
 ## 🇬🇧 English
 
-### What is ctrl-cli?
+### 💡 What is ctrl-cli?
 
-**ctrl-cli** is an ultra-lightweight AI coding agent CLI built with pure Rust. Chat with AI directly from your terminal, switch models on the fly, activate specialist skills — all without a browser!
+**`ctrl-cli`** is an ultra-lightweight AI coding assistant in your terminal — similar to *Claude Code* or *Cursor CLI*, but engineered to be **extremely small (~1.8 MB)** and blazingly fast using **pure Rust**.
 
-Binary size is only **~1.8 MB** with minimal RAM usage.
+No heavy web browser or electronic bloat required:
+- 💬 **Code Discussions & Pairing**: Chat directly from your terminal as if pair-programming with a senior engineer.
+- 🛠️ **Autonomous Workspace Exploration & Edits**: The agent can inspect directory trees, surgical-edit code, and run terminal commands safely.
+- 🩺 **Self-Healing Code Loop**: Automatically runs compiler checks (`cargo check`, python compiler, tsc) after edits and immediately self-corrects any compilation or syntax errors.
+- 🛡️ **Panic-Free Safety (Snapshot & Undo)**: Before modifying any file, an automatic shadow checkpoint is saved. Don't like the AI's changes? Simply type `/undo` to instantly restore your file!
+- 🌐 **Web Search & Documentation Fetch**: Integrated with DuckDuckGo to browse up-to-date documentation and troubleshoot errors online.
+- 🔌 **Freedom of AI Providers**: Use free & ultra-fast cloud models (Groq), 100% offline local models (Ollama), or top-tier APIs (OpenAI GPT-4o, DeepSeek, Claude 3.5 Sonnet).
 
-### ✨ Key Features
+---
 
-| Feature | Description |
-|---------|-------------|
-| 🤖 Autonomous Agent | ReAct loop engine for autonomous code inspection & execution |
-| ⚡ Real-Time Streaming | Live SSE streaming (`stream: true`) directly into terminal |
-| 🩺 Self-Healing Code Loop | Automated compiler diagnostics feedback (`cargo check`, python, tsc) for self-correction |
-| 🔄 Git Checkpoint & Undo | Shadow file snapshots, unified `/diff` review, & instant rollback via `/undo` |
-| 🧹 Context Compaction | Automatic & manual context compaction to prevent context window blowouts |
-| 🌐 Web Search & Fetch | Built-in `web_fetch` (HTML to clean Markdown) & `web_search` (DuckDuckGo) |
-| 🔌 MCP Protocol Support | Model Context Protocol client (`.ctrl/mcp.json`) for dynamic external tools |
-| 👥 Subagent Delegation | Delegate isolated research and heavy sub-tasks to child agents via `subagent` |
-| 🛠️ 14 Built-in Tools | Full fx-style tool suite (`read`, `write`, `edit`, `glob`, `grep`, `shell`, `web`, `subagent`, etc.) |
-| 🛡️ Permission Gate | Interactive safety policy (`Ask`, `AutoApprove`, `ReadOnly`) |
-| 🖥️ REPL Mode | Interactive chat directly in terminal with `/` autocompletion |
-| ⚡ Generate Mode | Execute tasks & generate code from a single CLI command |
-| 📊 Token & Context | Real-time token consumption & context window monitoring |
-| 🎯 Specialist Skills | 8 built-in skills + support for loading local `SKILL.md` |
-| 🔄 Model Switching | Switch AI models anytime within REPL |
-| 🔌 Multi-Provider | Supports OpenAI, DeepSeek, Groq, OpenRouter, etc. |
-| 👤 User Profile | Personalize name, tech stack, response language |
-| 📦 Tiny Binary | ~2.0 MB, LTO optimized, runs without installation |
+### ⚡ 3-Minute Quick Start
 
-### 🎯 Available Skills
-
-| Skill ID | Name | Purpose |
-|----------|------|---------|
-| `rust-expert` | 🦀 Rust Expert | Idiomatic & memory-safe Rust code |
-| `code-reviewer` | 🔍 Code Reviewer | Audit bugs, security & code smells |
-| `web-frontend` | 🎨 Web Frontend UI/UX | Modern responsive HTML/CSS/Tailwind |
-| `api-architect` | 🏗️ API & Backend Architect | REST/GraphQL design, database, auth |
-| `security-auditor` | 🛡️ Security Auditor | OWASP Top 10, exploit mitigation |
-| `debugger` | 🐞 Debugger & Trace Doctor | Error analysis & stack trace |
-| `test-engineer` | 🧪 Test Engineer & TDD | Unit tests, integration tests, mocks |
-| `refactor` | 🧹 Clean Code & Refactoring | SOLID, DRY, modular architecture |
-
-### 🚀 Getting Started
-
-#### 1. Prerequisites
-
-- [Rust](https://rustup.rs/) (edition 2021+)
-- An API key from one of these AI providers:
-  - [OpenAI](https://platform.openai.com/)
-  - [DeepSeek](https://platform.deepseek.com/)
-  - [Groq](https://console.groq.com/) *(free tier available)*
-  - [OpenRouter](https://openrouter.ai/)
-
-#### 2. Clone & Setup
-
+#### 1. Clone & Enter Directory
+Ensure you have [Rust](https://rustup.rs/) (2021+ edition) installed, then run:
 ```bash
 git clone https://github.com/gafirin5/code-agent-rust.git
 cd code-agent-rust
+```
 
-# Copy the configuration file
+#### 2. Configure Your `.env`
+Copy the environment template:
+```bash
+# On Windows (CMD / PowerShell):
+copy .env.example .env
+
+# On Linux / macOS:
 cp .env.example .env
 ```
 
-#### 3. Configure `.env`
-
-Open `.env` and fill in your settings:
+Open `.env` and configure your preferred provider:
 
 ```env
-# Your AI provider API key (required)
-AI_API_KEY=sk-xxxxxxxxxxxxxxxx
-
-# Provider base URL (optional, defaults to OpenAI)
-AI_BASE_URL=https://api.openai.com/v1
-
-# Model name (optional, defaults to gpt-4o-mini)
-AI_MODEL=gpt-4o-mini
-```
-
-**Other provider examples:**
-
-```env
-# DeepSeek
-AI_BASE_URL=https://api.deepseek.com/v1
-AI_MODEL=deepseek-chat
-
-# Groq (fast & free tier)
+# Option 1: Groq (Free Tier & Super Fast!)
+AI_API_KEY=gsk_xxxxxxxxxxxxxxxxxxxxxx
 AI_BASE_URL=https://api.groq.com/openai/v1
 AI_MODEL=llama-3.3-70b-versatile
 
-# OpenRouter
-AI_BASE_URL=https://openrouter.ai/api/v1
-AI_MODEL=anthropic/claude-3.5-sonnet
+# Option 2: OpenAI
+# AI_API_KEY=sk-xxxxxxxxxxxxxxxxxxxxxx
+# AI_BASE_URL=https://api.openai.com/v1
+# AI_MODEL=gpt-4o-mini
+
+# Option 3: DeepSeek
+# AI_API_KEY=sk-xxxxxxxxxxxxxxxxxxxxxx
+# AI_BASE_URL=https://api.deepseek.com/v1
+# AI_MODEL=deepseek-chat
+
+# Option 4: Local Ollama (100% Offline & Free, No API Key needed)
+# AI_API_KEY=ollama
+# AI_BASE_URL=http://localhost:11434/v1
+# AI_MODEL=qwen2.5-coder:7b
 ```
 
-#### 4. Build & Run
-
+#### 3. Run It!
 ```bash
-# Build release binary (one time only)
-cargo build --release
-
-# Start interactive REPL
-./target/release/ctrl-cli
-
-# Or generate code directly
-./target/release/ctrl-cli generate "write a quicksort in Rust"
-
-# Generate code with token & context window metrics
-./target/release/ctrl-cli generate -t "write a quicksort in Rust"
+# Launch interactive REPL mode:
+cargo run
 ```
+*You're all set! Your terminal is ready for your first AI coding prompt.* 🎉
 
-### 💬 Using the REPL
+---
 
-After running, you will enter REPL mode:
+### 🎮 4 Ways to Use ctrl-cli
 
+Choose whatever workflow fits you best:
+
+#### 1. 💬 Interactive Chat Mode (REPL) — *Most Popular*
+Start a conversation right in your terminal:
+```bash
+cargo run
 ```
+Terminal prompt:
+```text
 ══════════════════════════════════════════════════════════════
- 🤖 ctrl-cli REPL (AI Coding Agent)
- Active Model: gpt-4o-mini
+ 🤖 ctrl-cli REPL (AI Coding Agent v0.3.0)
+ Active Model: llama-3.3-70b-versatile
  Type your prompt and press Enter.
- Press `/` for interactive autocomplete (navigate with ↑ / ↓).
- Commands: /tokens, /model, /skill, /dev, /profile, /info, /clear, /help, /exit
+ Type `/` to open interactive quick command menu.
 ══════════════════════════════════════════════════════════════
 
-[gpt-4o-mini] ➜ 
+[llama-3.3-70b] ➜ Write a thread-safe LRU cache in Rust with unit tests
 ```
 
-Just type your question or code request and press Enter! A token usage badge will automatically display below each response (e.g. `📊 [Tokens: 120 in + 350 out = 470 total | Context: 0.37% of 128k]`).
-
-### ⌨️ Slash Commands
-
-| Command | Function |
-|---------|----------|
-| `/` | Open interactive menu (navigate with ↑↓) |
-| `/tools` | List the 14 built-in agent tools, execution status & MCP bridge |
-| `/undo` | Rollback last file modification from shadow checkpoint |
-| `/diff [file]` | Display colorized unified diff of recent changes or git diff |
-| `/check [file]` | Run compiler / syntax check (*self-healing loop*) |
-| `/compact` | Compact old conversation history to conserve context window |
-| `/mcp` | View Model Context Protocol (`.ctrl/mcp.json`) server & tool status |
-| `/stream` | Toggle real-time SSE output streaming (`on` / `off`) |
-| `/checkpoints` | List recent saved file shadow snapshots |
-| `/permissions` | Configure tool security policy (`Ask`, `AutoApprove`, `ReadOnly`) |
-| `/memory` | Inspect long-term project memory (`.ctrl/MEMORY.md`) |
-| `/reset` | Clear conversation history & session memory (fresh context) |
-| `/save [file]` | Save last generated code snippet directly to file (auto-detects filename) |
-| `/tokens` | Check token statistics (in/out/total) & context window capacity |
-| `/tokens toggle` | Enable or disable the automatic token badge below responses |
-| `/model` | Select AI model from an interactive list |
-| `/model <name>` | Switch model directly (e.g. `/model deepseek-chat`) |
-| `/skill` | Pick a specialist skill from a list |
-| `/skill <id>` | Activate a specific skill (e.g. `/skill rust-expert`) |
-| `/skill reset` | Deactivate skill, return to General Assistant |
-| `/profile` | View active developer profile |
-| `/dev` | About developer / author information |
-| `/info` | Check active endpoint, model, context window & session token total |
-| `/clear` | Clear terminal screen |
-| `/help` | Show help |
-| `/exit` | Exit REPL |
-
-### 🛠️ Built-in Agent Tools & Security
-
-The AI agent in `ctrl-cli` can autonomously inspect and modify projects using 14 built-in tools + MCP:
-
-- **`read_file`**: Read file content with line numbers and offset support.
-- **`write_file`**: Create new files or overwrite existing files (with auto-checkpoint & self-heal).
-- **`edit_file`**: Precise surgical code replacements (with auto-checkpoint & self-heal).
-- **`code_check`**: Run compiler or syntax validation (`cargo check`, `py_compile`, `tsc`).
-- **`web_fetch`**: Fetch web pages from HTTP(S) URLs and convert HTML to clean Markdown.
-- **`web_search`**: Search programming documentation and solutions via DuckDuckGo.
-- **`subagent`**: Delegate isolated tasks or research to a child agent loop.
-- **`glob_files`**: Discover files matching wildcard patterns (e.g., `**/*.rs`).
-- **`grep_files`**: Search code and text across the workspace with line numbers.
-- **`shell`**: Safely execute shell commands with stdout/stderr capture.
-- **`read_tool_result`**: Paginate and read long truncated tool results.
-- **`ask_user_question`**: Prompt user interactively for clarification or decisions.
-- **`skill`**: Load specialized guidance from local `SKILL.md` files.
-- **`manage_memory`**: View or append to persistent project memory in `.ctrl/MEMORY.md`.
-- **`mcp__<server>__<tool>`**: Dynamically loaded external tools from Model Context Protocol servers.
-
-#### 🛡️ Permission Modes
-Use `/permissions` in REPL to configure the security level:
-1. **`Ask`** *(Default)*: The agent prompts for your approval before modifying files or executing shell commands.
-2. **`AutoApprove`**: Automatically approves all tool executions (ideal for unattended workflows).
-3. **`ReadOnly`**: Blocks all shell execution and mutating file operations.
-
-### 🧬 Advanced Features (Inspired by `fx`)
-1. **Self-Healing Code Loop**: When files are written or edited, `ctrl-cli` automatically inspects compilation diagnostics. If an error occurs (e.g., `cargo check`), compiler diagnostic feedback is seamlessly returned to the agent to fix immediately in the next turn.
-2. **Git Checkpoint & `/undo` / `/diff`**: Before any file mutation, a shadow snapshot is preserved in `.ctrl/snapshots/`. You can inspect changes with colorized unified diffs via `/diff` or safely roll back any file to its previous state with `/undo`.
-3. **Real-Time Streaming Output**: Text and reasoning deltas are streamed in real-time via Server-Sent Events (SSE), making terminal interactions fluid and zero-latency.
-4. **Smart Context Compaction**: When context nears 65-70% limit or exceeds 16 turns, the agent intelligently condenses older conversation turns into a compact summary preserving key instructions and active files.
-5. **Built-in Web Fetch & Search**: Agent can browse live web documentation (`web_fetch`) and search for bug fixes online (`web_search`).
-6. **Model Context Protocol (MCP)**: Configure `.ctrl/mcp.json` to link external tools such as SQLite, GitHub, browser automation, or PostgreSQL via stdio JSON-RPC.
-7. **Background Subagent Delegation**: Heavy investigation, dependency audits, or auxiliary research can be delegated to isolated child subagents via `subagent`.
-
-### 🧠 Persistent Memory & Auto-Writer
-- **Automatic Sessions**: Conversation history is persisted in `.ctrl/session.json` and restored across REPL launches. Use `/reset` to start clean.
-- **Long-Term Memory**: Persistent project notes are stored in `.ctrl/MEMORY.md` and fed into the agent's system prompt.
-- **Auto-Writer Safety Net**: If the model outputs code blocks when asked to build or write a file without invoking `write_file`, the CLI automatically detects the intended filename and writes the file for you.
-
-### 🔧 Using Generate Mode
-
+#### 2. 🌐 Web Dashboard UI (Browser Mode) — *New in v0.3.0!*
+Prefer a visual browser experience?
 ```bash
-# Basic code generation
-ctrl-cli generate "create a linked list struct in Rust"
+cargo run -- serve
+```
+Then open your browser at: **`http://127.0.0.1:3000`**. You get an interactive chat interface, live task board, and code editor!
 
-# Write directly to file (-o or --output) without flooding chat output
-ctrl-cli generate -o index.html "create a modern responsive HTML website landing page"
+#### 3. 🖥️ Fullscreen TUI Mode (Terminal Visual) — *New in v0.3.0!*
+For fans of terminal dashboards (*Vim / Htop* style):
+```bash
+cargo run -- --tui
+```
+Displays an interactive fullscreen terminal interface with chat feeds, file trees, and task statuses.
 
-# Display token usage and context window metrics (-t or --tokens)
-ctrl-cli generate -t "create a linked list struct in Rust"
+#### 4. ⚡ One-Shot Generate Mode
+Execute tasks and generate code without launching the REPL:
+```bash
+# Quick explanation or question
+cargo run -- generate "how to read a file line by line in Rust?"
 
-# With a specific skill
-ctrl-cli generate --skill rust-expert "implement a binary search tree"
+# Directly save output to a file without manual copy-pasting
+cargo run -- generate -o greet.py "write a python script that greets the user based on local time"
 
-# With a specific model
-ctrl-cli generate --model deepseek-chat "refactor this code to be cleaner"
+# Run with a specialist skill persona
+cargo run -- --skill rust-expert generate "create a zero-allocation parsing pipeline"
 ```
 
-### 👤 Profile Customization
+---
 
-Your profile is stored at `~/.ctrl-cli/profile.json`. Edit it to personalize:
+### 🛡️ Safety Architecture: Never Worry About Broken Code
 
+1. **Auto-Snapshot & `/undo`**:
+   Before modifying any file, `ctrl-cli` creates a shadow checkpoint in `.ctrl/snapshots/`.
+   - Type `/diff` to inspect colorized changes before committing.
+   - Type `/undo` if the AI made a mistake, instantly reverting the file to its exact previous state.
+2. **Permission Gate (`/permissions`)**:
+   - **`Ask` (Default)**: The agent always prompts for confirmation `[Y/n]` before modifying files or executing shell scripts.
+   - **`AutoApprove`**: For full hands-free autonomous workflows.
+   - **`ReadOnly`**: 100% safe mode; forbids all file writes and shell execution.
+3. **Self-Healing Code Loop**:
+   If generated code fails to compile, `ctrl-cli` captures compiler diagnostic logs (`cargo check`, python compiler, TypeScript) and automatically hands them back to the agent for instant self-correction.
+
+---
+
+### ⌨️ Slash Commands Cheat Sheet
+
+Inside the REPL, type `/` and press `↑`/`↓` arrow keys to autocomplete commands:
+
+| Category | Command | Description |
+|----------|---------|-------------|
+| **General** | `/help` | Display full help instructions |
+| | `/clear` | Clear terminal screen |
+| | `/exit` | Exit the application |
+| **Code & Files** | `/undo` | ⏪ **Rollback last file modification** to previous snapshot |
+| | `/diff [file]` | 🔍 Review unified diff of recent changes |
+| | `/check [file]` | 🩺 Run compiler/syntax check (*self-healing loop*) |
+| | `/save [file]` | 💾 Save last generated code snippet directly to disk |
+| | `/tools` | 🛠️ List 14 built-in agent tools and their statuses |
+| **AI & Models** | `/model` | Switch AI models interactively (e.g., GPT-4o, DeepSeek) |
+| | `/skill` | Activate specialist persona (Rust, Reviewer, Frontend, etc.) |
+| | `/tokens` | Check token usage & remaining context window capacity |
+| | `/compact` | 🧹 Compact long chat history to reduce token costs |
+| | `/stream` | Toggle real-time SSE output streaming |
+| | `/permissions` | Switch security modes (`Ask`, `AutoApprove`, `ReadOnly`) |
+| | `/reset` | Clear session history and start fresh context |
+
+---
+
+### 🎯 Built-in Specialist Skills
+
+Activate domain-specific agent intelligence with `/skill <name>`:
+
+| Skill | Focus & Expertise |
+|-------|-------------------|
+| `rust-expert` | 🦀 Idiomatic, zero-cost, memory-safe Rust engineering |
+| `code-reviewer` | 🔍 Bug detection, security audit, and clean code suggestions |
+| `web-frontend` | 🎨 Modern responsive HTML/CSS/Tailwind UI/UX |
+| `api-architect` | 🏗️ REST/GraphQL API design, database schemas, and auth |
+| `security-auditor` | 🛡️ OWASP Top 10 vulnerability mitigation and sanitization |
+| `debugger` | 🐞 Stack trace analysis and root cause investigation |
+| `test-engineer` | 🧪 Unit tests, integration tests, and TDD scenarios |
+| `refactor` | 🧹 Clean Code, SOLID principles, and modular architecture |
+
+---
+
+### 🛠️ Built-in Agent Tools
+
+The autonomous agent is equipped with 14 tools to work just like a human developer:
+- 📖 **`read_file`**: Read file content with line numbering and offsets.
+- ✍️ **`write_file` & `edit_file`**: Precise file writes and surgical edits with automatic snapshots.
+- 🔎 **`glob_files` & `grep_files`**: Search filenames and grep text across your workspace.
+- 💻 **`shell`**: Execute terminal commands safely with stdout/stderr capture.
+- 🌐 **`web_search` & `web_fetch`**: Search DuckDuckGo and convert web pages to readable Markdown.
+- 👥 **`subagent`**: Delegate heavy investigations to isolated child agents in the background.
+- 🧠 **`manage_memory`**: Read/write persistent project notes in `.ctrl/MEMORY.md`.
+- 🔌 **`mcp`**: Model Context Protocol client for external tools (PostgreSQL, GitHub, etc.).
+
+---
+
+### 👤 User Profile Personalization
+
+Personalize how the AI interacts with you by editing `~/.ctrl-cli/profile.json`:
 ```json
 {
-  "name": "yourname",
-  "tech_stack": ["Python", "TypeScript", "Rust"],
+  "name": "Alex",
+  "tech_stack": ["Rust", "Python", "TypeScript"],
   "response_language": "English",
-  "coding_style": "Write clean, modern, idiomatic, and efficient code."
+  "coding_style": "Write clean, modern, idiomatic code with concise explanations."
 }
 ```
 
 ---
 
+### 📚 Full Documentation
+Looking for deeper technical and architecture guides? Visit the [**`docs/`**](../docs/README.md) directory:
+- 📝 [v0.3.0 Release Notes & Changelog](../docs/UPDATE_NOTES.md)
+- ⚙️ [Configuration Guide](../docs/CONFIGURATION.md)
+- 🏗️ [System Architecture & Concurrency](../docs/ARCHITECTURE.md)
+- 🤖 [AI Agent Operations Guide](../docs/AI_AGENT_GUIDE.md)
+- 🛠️ [Comprehensive Tools Reference](../docs/TOOLS_REFERENCE.md)
+
+---
+
 ## 🇨🇳 中文
 
-### 什么是 ctrl-cli？
+### 💡 什么是 ctrl-cli？
 
-**ctrl-cli** 是一个用纯 Rust 构建的超轻量级 AI 编程助手 CLI。你可以直接在终端与 AI 对话、随时切换模型、激活专业技能 —— 无需浏览器！
+**`ctrl-cli`** 是你终端里的超轻量级 AI 编程助手 —— 类似于 *Claude Code* 或 *Cursor CLI*，但体积**极小（仅 ~1.8 MB）**，完全使用**纯 Rust** 编写，极致迅捷。
 
-二进制文件仅约 **~1.8 MB**，内存占用极少。
+无需启动笨重的浏览器或大型客户端：
+- 💬 **代码对话与结对编程**：直接在终端与 AI 讨论架构、编写函数与排查 Bug。
+- 🛠️ **自主工作区探索与修改**：智能体可自动浏览目录、精确定点编辑文件，并安全执行终端命令。
+- 🩺 **代码自愈修复（Self-Healing）**：写完代码后自动执行编译器诊断（`cargo check`、Python 编译、tsc），遇到报错立即自动纠错。
+- 🛡️ **安全防慌（快照备份与 `/undo`）**：修改任何文件前自动创建快照。如果不满意 AI 的改动，只需输入 `/undo` 即可瞬间回退！
+- 🌐 **实时网络检索**：集成 DuckDuckGo 搜索与网页抓取，随时查阅最新官方文档与报错解决方案。
+- 🔌 **自由选择 AI 模型**：支持免费且极速的 Groq、100% 离线隐私的本地 Ollama，以及顶级商用模型（OpenAI GPT-4o、DeepSeek、Claude 3.5 Sonnet）。
 
-### ✨ 主要功能
+---
 
-| 功能 | 说明 |
-|------|------|
-| 🤖 自主智能体 | ReAct 循环执行引擎，自主审查和修改代码 |
-| 🛠️ 9 个内置工具 | 类 Unix 工具（`read`, `write`, `edit`, `glob`, `grep`, `shell` 等） |
-| 🛡️ 权限安全门 | 交互式安全策略（`Ask`, `AutoApprove`, `ReadOnly`） |
-| 🖥️ REPL 模式 | 直接在终端进行带自动补全的交互式对话 |
-| ⚡ 生成模式 | 单行命令行直接执行任务并生成代码 |
-| 📊 Token 与上下文 | 实时监控 Token 消耗与模型上下文窗口容量 |
-| 🎯 专业技能 | 8 种内置技能 + 支持加载本地 `SKILL.md` |
-| 🔄 切换模型 | 在 REPL 中随时切换 AI 模型 |
-| 🔌 多提供商 | 支持 OpenAI、DeepSeek、Groq、OpenRouter 等 |
-| 👤 用户配置 | 个性化名称、技术栈、响应语言 |
-| 📦 体积极小 | ~2.0 MB，LTO 极致优化，开箱即用 |
+### ⚡ 3 步快速上手
 
-### 🎯 可用技能
-
-| 技能 ID | 名称 | 用途 |
-|---------|------|------|
-| `rust-expert` | 🦀 Rust 专家 | 惯用且内存安全的 Rust 代码 |
-| `code-reviewer` | 🔍 代码审查员 | 审查 Bug、安全漏洞和代码异味 |
-| `web-frontend` | 🎨 Web 前端 UI/UX | 现代响应式 HTML/CSS/Tailwind |
-| `api-architect` | 🏗️ API & 后端架构师 | REST/GraphQL 设计、数据库、认证 |
-| `security-auditor` | 🛡️ 安全审计员 | OWASP Top 10、漏洞缓解 |
-| `debugger` | 🐞 调试器 & 追踪专家 | 错误分析 & 堆栈跟踪 |
-| `test-engineer` | 🧪 测试工程师 & TDD | 单元测试、集成测试、Mock |
-| `refactor` | 🧹 整洁代码 & 重构 | SOLID、DRY、模块化架构 |
-
-### 🚀 快速开始
-
-#### 1. 前置条件
-
-- [Rust](https://rustup.rs/)（2021 版或更高）
-- 来自以下 AI 提供商之一的 API 密钥：
-  - [OpenAI](https://platform.openai.com/)
-  - [DeepSeek](https://platform.deepseek.com/)
-  - [Groq](https://console.groq.com/) *(有免费额度)*
-  - [OpenRouter](https://openrouter.ai/)
-
-#### 2. 克隆并设置
-
+#### 1. 克隆并进入目录
+确保电脑已安装 [Rust](https://rustup.rs/)（2021 版或更高版本）：
 ```bash
 git clone https://github.com/gafirin5/code-agent-rust.git
 cd code-agent-rust
+```
 
-# 复制配置文件
+#### 2. 配置 `.env` 密钥文件
+复制配置模板：
+```bash
+# Windows (CMD / PowerShell):
+copy .env.example .env
+
+# Linux / macOS:
 cp .env.example .env
 ```
 
-#### 3. 配置 `.env`
-
-打开 `.env` 文件并填写你的设置：
+编辑 `.env` 文件，填入你偏好的 AI 提供商：
 
 ```env
-# AI 提供商的 API 密钥（必填）
-AI_API_KEY=sk-xxxxxxxxxxxxxxxx
-
-# 提供商基础 URL（可选，默认为 OpenAI）
-AI_BASE_URL=https://api.openai.com/v1
-
-# 模型名称（可选，默认为 gpt-4o-mini）
-AI_MODEL=gpt-4o-mini
-```
-
-**其他提供商示例：**
-
-```env
-# DeepSeek
-AI_BASE_URL=https://api.deepseek.com/v1
-AI_MODEL=deepseek-chat
-
-# Groq（快速且有免费额度）
+# 示例 1: 使用 Groq（快速且提供免费额度！）
+AI_API_KEY=gsk_xxxxxxxxxxxxxxxxxxxxxx
 AI_BASE_URL=https://api.groq.com/openai/v1
 AI_MODEL=llama-3.3-70b-versatile
 
-# OpenRouter
-AI_BASE_URL=https://openrouter.ai/api/v1
-AI_MODEL=anthropic/claude-3.5-sonnet
+# 示例 2: 使用 OpenAI
+# AI_API_KEY=sk-xxxxxxxxxxxxxxxxxxxxxx
+# AI_BASE_URL=https://api.openai.com/v1
+# AI_MODEL=gpt-4o-mini
+
+# 示例 3: 使用 DeepSeek
+# AI_API_KEY=sk-xxxxxxxxxxxxxxxxxxxxxx
+# AI_BASE_URL=https://api.deepseek.com/v1
+# AI_MODEL=deepseek-chat
+
+# 示例 4: 使用本地 Ollama（100% 离线免密钥）
+# AI_API_KEY=ollama
+# AI_BASE_URL=http://localhost:11434/v1
+# AI_MODEL=qwen2.5-coder:7b
 ```
 
-#### 4. 构建并运行
-
+#### 3. 运行！
 ```bash
-# 构建发布版（仅需一次）
-cargo build --release
-
-# 启动交互式 REPL
-./target/release/ctrl-cli
-
-# 或直接生成代码
-./target/release/ctrl-cli generate "用 Rust 写一个快速排序"
+# 启动交互式终端模式（REPL）：
+cargo run
 ```
+*大功告成！终端已准备就绪，输入你的第一条编程指令吧。* 🎉
 
-### 💬 使用 REPL
+---
 
-运行后，你将进入 REPL 模式：
+### 🎮 4 种运行模式
 
-```
-══════════════════════════════════════════════════════════════
- 🤖 ctrl-cli REPL (AI Coding Agent)
- Active Model: gpt-4o-mini
- 输入你的提示并按 Enter。
-══════════════════════════════════════════════════════════════
-
-[gpt-4o-mini] ➜ 
-```
-
-直接输入问题或代码请求，然后按 Enter！
-
-### ⌨️ 斜杠命令
-
-| 命令 | 功能 |
-|------|------|
-| `/` | 打开交互菜单（用 ↑↓ 导航选择） |
-| `/tools` | 查看 9 个内置智能体工具列表及其执行策略 |
-| `/permissions` | 设置工具安全权限策略（`Ask`, `AutoApprove`, `ReadOnly`） |
-| `/memory` | 查看项目长期记忆记录（`.ctrl/MEMORY.md`） |
-| `/reset` | 清空对话历史和会话记忆（开启全新上下文） |
-| `/save [文件]` | 将最近生成的代码直接保存到文件（自动检测文件名） |
-| `/tokens` | 查看 Token 使用统计与模型上下文窗口上限 |
-| `/tokens toggle` | 开启/关闭响应后自动显示的 Token 状态栏 |
-| `/model` | 从交互列表中选择 AI 模型 |
-| `/model <name>` | 直接切换模型（例如 `/model deepseek-chat`） |
-| `/skill` | 从列表中选择专业技能 |
-| `/skill <id>` | 激活特定技能（例如 `/skill rust-expert`） |
-| `/skill reset` | 停用技能，返回通用助手 |
-| `/profile` | 查看当前开发者配置 |
-| `/dev` | 查看开发者与作者信息 |
-| `/info` | 检查活跃端点、模型、上下文窗口和会话总 Token |
-| `/clear` | 清除终端屏幕 |
-| `/help` | 显示帮助 |
-| `/exit` | 退出 REPL |
-
-### 🛠️ 内置智能体工具与安全策略
-
-`ctrl-cli` 中的 AI 智能体可以通过 9 种内置工具自主检查和修改工作区：
-
-- **`read_file`**: 读取文件内容，支持行号和偏移。
-- **`write_file`**: 创建新文件或覆盖已有文件。
-- **`edit_file`**: 精确替换代码片段（精准手术式修改）。
-- **`glob_files`**: 模式匹配检索工作区文件路径（如 `**/*.rs`）。
-- **`grep_files`**: 全局检索代码与文本关键词。
-- **`shell`**: 安全执行终端命令并捕获标准输出与错误。
-- **`read_tool_result`**: 分页读取过长截断的工具执行结果。
-- **`ask_user_question`**: 在需要澄清或确认时向用户交互式提问。
-- **`skill`**: 加载本地 `SKILL.md` 的专精规则。
-
-#### 🛡️ 权限安全门（Permission Modes）
-在 REPL 中输入 `/permissions` 切换安全策略：
-1. **`Ask`**（默认）：执行修改文件或运行 Shell 脚本前，智能体会先征询您的批准。
-2. **`AutoApprove`**：自动允许所有工具调用（适用于全自动场景）。
-3. **`ReadOnly`**：只读模式，拦截所有 Shell 命令和文件写入。
-
-### 🧠 持久化记忆与自动保存
-- **会话持久化**：对话历史自动保存在 `.ctrl/session.json`，重启 REPL 时自动恢复。使用 `/reset` 即可重置。
-- **长期记忆**：工作区关键信息存放在 `.ctrl/MEMORY.md` 并自动作为 System Prompt 的一部分。
-- **Auto-Writer 安全兜底**：当您要求创建网页或脚本而模型忘记调用 `write_file` 时，CLI 会自动检测代码块中的文件名并为您写入磁盘。
-
-### 🔧 使用生成模式
-
+#### 1. 💬 交互对话模式 (REPL) — *最常用*
 ```bash
-# 基本代码生成
-ctrl-cli generate "用 Rust 创建一个链表结构"
+cargo run
+```
+终端界面：
+```text
+══════════════════════════════════════════════════════════════
+ 🤖 ctrl-cli REPL (AI Coding Agent v0.3.0)
+ Active Model: llama-3.3-70b-versatile
+ 输入你的问题并按 Enter。
+ 输入 `/` 弹出交互式快捷命令列表。
+══════════════════════════════════════════════════════════════
 
-# 指定技能
-ctrl-cli generate --skill rust-expert "实现二叉搜索树"
-
-# 指定模型
-ctrl-cli generate --model deepseek-chat "重构这段代码使其更简洁"
+[llama-3.3-70b] ➜ 用 Rust 写一个线程安全的 LRU 缓存并包含测试用例
 ```
 
-### 👤 个性化配置
+#### 2. 🌐 Web 仪表盘模式 (浏览器界面) — *v0.3.0 新特性!*
+```bash
+cargo run -- serve
+```
+然后在浏览器中打开：**`http://127.0.0.1:3000`**。享受包含对话界面、代码编辑器和任务看板的现代 Web UI！
 
-你的配置存储在 `~/.ctrl-cli/profile.json`，可以编辑它进行个性化：
+#### 3. 🖥️ 全屏 TUI 终端模式 — *v0.3.0 新特性!*
+适合终端极客（*Vim/Htop* 风格）：
+```bash
+cargo run -- --tui
+```
 
+#### 4. ⚡ 单行生成模式 (Generate)
+无需进入交互界面，单行指令直接完成任务：
+```bash
+# 快速提问
+cargo run -- generate "Rust 如何逐行读取大文件？"
+
+# 直接将代码保存到文件，避免繁琐复制
+cargo run -- generate -o greet.py "写一个根据当前时间向用户打招呼的 Python 脚本"
+
+# 切换专家角色执行任务
+cargo run -- --skill rust-expert generate "设计零分配数据解析流"
+```
+
+---
+
+### 🛡️ 安全架构：告别代码被改坏的担忧
+
+1. **自动快照与 `/undo`**：
+   修改文件前，系统在 `.ctrl/snapshots/` 中自动备份。
+   - 输入 `/diff` 查看高亮改动对比。
+   - 输入 `/undo` 即可一键恢复原样。
+2. **权限门控 (`/permissions`)**：
+   - **`Ask`（默认）**：执行文件写入或 Shell 命令前会向你征询确认 `[Y/n]`。
+   - **`AutoApprove`**：适合无人值守的全自动流。
+   - **`ReadOnly`**：只读模式，完全杜绝文件修改与命令执行。
+3. **自愈修复循环 (Self-Healing Loop)**：
+   自动检测编译器报错（`cargo check`、Python、TypeScript），并将报错信息无缝提供给 AI 进行自动修复。
+
+---
+
+### ⌨️ 常用斜杠快捷命令速查
+
+在 REPL 中输入 `/` 并按键盘 `↑`/`↓` 键即可唤出命令：
+
+| 分类 | 命令 | 说明 |
+|------|------|------|
+| **常用** | `/help` | 显示完整帮助说明 |
+| | `/clear` | 清理终端屏幕 |
+| | `/exit` | 退出程序 |
+| **文件与代码** | `/undo` | ⏪ **撤销最近的文件改动**（恢复上一快照） |
+| | `/diff [文件]` | 🔍 查看最新文件改动的 Unified Diff 对比 |
+| | `/check [文件]` | 🩺 运行编译器/语法检查（*自愈循环*） |
+| | `/save [文件]` | 💾 将最近生成的代码直接保存到磁盘 |
+| | `/tools` | 🛠️ 查看 14 种内置工具及其运行状态 |
+| **模型与技能** | `/model` | 交互式切换 AI 模型（如 GPT-4o、DeepSeek 等） |
+| | `/skill` | 激活专业角色技能（Rust、Reviewer、前端等） |
+| | `/tokens` | 查看上下文窗口容量与 Token 消耗统计 |
+| | `/compact` | 🧹 压缩长对话上下文以降低 Token 消耗 |
+| | `/stream` | 开启/关闭打字机式流式输出 |
+| | `/permissions` | 切换安全策略（`Ask`, `AutoApprove`, `ReadOnly`） |
+| | `/reset` | 清空历史会话，开启新话题 |
+
+---
+
+### 🎯 内置专家技能
+
+输入 `/skill <名称>` 即可为智能体分配专业领域特长：
+
+| 技能 | 核心特长 |
+|------|----------|
+| `rust-expert` | 🦀 惯用、零成本抽象、内存安全的 Rust 高级开发 |
+| `code-reviewer` | 🔍 Bug 审查、安全漏洞防范与 Clean Code 建议 |
+| `web-frontend` | 🎨 现代化响应式 HTML/CSS/Tailwind 前端与交互设计 |
+| `api-architect` | 🏗️ REST/GraphQL API 设计、数据库建模与认证 |
+| `security-auditor` | 🛡️ OWASP Top 10 漏洞审计与输入清理 |
+| `debugger` | 🐞 堆栈跟踪分析与深层 Bug 定位排查 |
+| `test-engineer` | 🧪 单元测试、集成测试与 TDD 测试用例编写 |
+| `refactor` | 🧹 代码异味重构与模块化架构设计 |
+
+---
+
+### 🛠️ 智能体 14 种内置工具
+
+- 📖 **`read_file`**：带行号与偏移量的高效文件读取。
+- ✍️ **`write_file` & `edit_file`**：高精度写入与局部定点手术式替换（带自动快照）。
+- 🔎 **`glob_files` & `grep_files`**：文件名通配与全局文本关键词检索。
+- 💻 **`shell`**：安全执行系统终端命令并捕获标准输出与错误。
+- 🌐 **`web_search` & `web_fetch`**：DuckDuckGo 在线搜索与网页转 Markdown 解析。
+- 👥 **`subagent`**：在后台启动隔离的子智能体执行重型检索任务。
+- 🧠 **`manage_memory`**：在 `.ctrl/MEMORY.md` 读写长期记忆。
+- 🔌 **`mcp`**：支持 Model Context Protocol 连接外部工具（Postgres、GitHub 等）。
+
+---
+
+### 👤 开发者个性化配置
+
+在 `~/.ctrl-cli/profile.json` 中配置你的偏好：
 ```json
 {
   "name": "你的名字",
-  "tech_stack": ["Python", "TypeScript", "Rust"],
+  "tech_stack": ["Rust", "Python", "TypeScript"],
   "response_language": "中文",
-  "coding_style": "编写简洁、现代、高效的代码。"
+  "coding_style": "编写简洁、现代、高效且带必要注释的代码。"
 }
 ```
+
+---
+
+### 📚 完整文档
+更多技术设计与架构细节，请参阅 [**`docs/`**](../docs/README.md) 目录：
+- 📝 [v0.3.0 更新日志与说明](../docs/UPDATE_NOTES.md)
+- ⚙️ [完整配置指南](../docs/CONFIGURATION.md)
+- 🏗️ [系统架构与并发模型](../docs/ARCHITECTURE.md)
+- 🤖 [AI 智能体操作指南](../docs/AI_AGENT_GUIDE.md)
+- 🛠️ [完整工具参考手册](../docs/TOOLS_REFERENCE.md)
 
 ---
 
