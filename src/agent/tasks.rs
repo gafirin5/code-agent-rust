@@ -1,7 +1,7 @@
 #![allow(dead_code)]
 
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::panic::{self, AssertUnwindSafe};
 use std::str::FromStr;
@@ -63,15 +63,15 @@ impl TaskStatus {
 
     /// Enforces the valid transition matrix of the lifecycle state machine.
     pub fn can_transition_to(&self, next: TaskStatus) -> bool {
-        match (self, next) {
-            (Self::Queued, Self::Running) => true,
-            (Self::Queued, Self::Cancelled) => true,
-            (Self::Queued, Self::Failed) => true,
-            (Self::Running, Self::Completed) => true,
-            (Self::Running, Self::Failed) => true,
-            (Self::Running, Self::Cancelled) => true,
-            _ => false,
-        }
+        matches!(
+            (self, next),
+            (Self::Queued, Self::Running)
+                | (Self::Queued, Self::Cancelled)
+                | (Self::Queued, Self::Failed)
+                | (Self::Running, Self::Completed)
+                | (Self::Running, Self::Failed)
+                | (Self::Running, Self::Cancelled)
+        )
     }
 
     /// Produces an ANSI-colored status badge for interactive REPL displays.
@@ -185,6 +185,8 @@ pub enum TaskError {
     SpawnFailed(String),
     CannotRemoveRunning(String),
     LockPoisoned(String),
+    CyclicDependency(Vec<String>),
+    MissingDependency { task: String, missing: String },
 }
 
 impl fmt::Display for TaskError {
@@ -195,7 +197,11 @@ impl fmt::Display for TaskError {
                 write!(f, "Task is already in terminal state '{}'", status)
             }
             Self::InvalidTransition { from, to } => {
-                write!(f, "Invalid task state transition from '{}' to '{}'", from, to)
+                write!(
+                    f,
+                    "Invalid task state transition from '{}' to '{}'",
+                    from, to
+                )
             }
             Self::Timeout(dur) => write!(f, "Task timed out after {:?}", dur),
             Self::Cancelled(reason) => write!(f, "Task cancelled: {}", reason),
@@ -205,11 +211,181 @@ impl fmt::Display for TaskError {
                 write!(f, "Cannot remove task '{}' while it is still running", id)
             }
             Self::LockPoisoned(ctx) => write!(f, "Lock poisoned in {}", ctx),
+            Self::CyclicDependency(cycle) => {
+                write!(
+                    f,
+                    "Cycle detected in task dependencies: {}",
+                    cycle.join(" -> ")
+                )
+            }
+            Self::MissingDependency { task, missing } => {
+                write!(f, "Task '{}' depends on missing task '{}'", task, missing)
+            }
         }
     }
 }
 
 impl std::error::Error for TaskError {}
+
+// ============================================================================
+// 3b. DAG Task Dependency Graph & Cycle Validator
+// ============================================================================
+
+/// Errors arising from invalid DAG structures (cycles, missing dependencies).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DagValidationError {
+    CycleDetected(Vec<String>),
+    MissingDependency { task: String, missing: String },
+}
+
+impl fmt::Display for DagValidationError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::CycleDetected(cycle) => {
+                write!(
+                    f,
+                    "Cycle detected in task dependencies: {}",
+                    cycle.join(" -> ")
+                )
+            }
+            Self::MissingDependency { task, missing } => {
+                write!(f, "Task '{}' depends on missing task '{}'", task, missing)
+            }
+        }
+    }
+}
+
+impl std::error::Error for DagValidationError {}
+
+/// Representation of a task in the dependency graph.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DagTask {
+    pub id: String,
+    pub dependencies: Vec<String>,
+}
+
+impl DagTask {
+    pub fn new(id: impl Into<String>, dependencies: Vec<String>) -> Self {
+        Self {
+            id: id.into(),
+            dependencies,
+        }
+    }
+}
+
+/// DAG Validator verifying acyclicity, dependency completeness, and execution ordering.
+pub struct DagValidator;
+
+impl DagValidator {
+    /// Validates that a set of tasks contains no missing dependencies and no circular dependency cycles.
+    pub fn validate(tasks: &[DagTask]) -> Result<(), DagValidationError> {
+        let task_map: HashMap<&str, &DagTask> = tasks.iter().map(|t| (t.id.as_str(), t)).collect();
+
+        // 1. Check for missing prerequisites
+        for task in tasks {
+            for dep in &task.dependencies {
+                if !task_map.contains_key(dep.as_str()) {
+                    return Err(DagValidationError::MissingDependency {
+                        task: task.id.clone(),
+                        missing: dep.clone(),
+                    });
+                }
+            }
+        }
+
+        // 2. Cycle detection via recursive DFS
+        let mut visited = HashSet::new();
+        let mut on_stack = HashSet::new();
+        let mut cycle_path = Vec::new();
+
+        fn dfs<'a>(
+            node: &'a str,
+            map: &HashMap<&str, &'a DagTask>,
+            visited: &mut HashSet<&'a str>,
+            on_stack: &mut HashSet<&'a str>,
+            cycle_path: &mut Vec<String>,
+        ) -> bool {
+            visited.insert(node);
+            on_stack.insert(node);
+            cycle_path.push(node.to_string());
+
+            if let Some(task) = map.get(node) {
+                for dep in &task.dependencies {
+                    let dep_str = dep.as_str();
+                    if on_stack.contains(dep_str) {
+                        cycle_path.push(dep.clone());
+                        return true;
+                    }
+                    if !visited.contains(dep_str)
+                        && dfs(dep_str, map, visited, on_stack, cycle_path)
+                    {
+                        return true;
+                    }
+                }
+            }
+
+            on_stack.remove(node);
+            cycle_path.pop();
+            false
+        }
+
+        for task in tasks {
+            if !visited.contains(task.id.as_str())
+                && dfs(
+                    task.id.as_str(),
+                    &task_map,
+                    &mut visited,
+                    &mut on_stack,
+                    &mut cycle_path,
+                )
+            {
+                return Err(DagValidationError::CycleDetected(cycle_path));
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Topologically sort tasks into a valid linear execution order (Kahn's algorithm).
+    pub fn topological_sort(tasks: &[DagTask]) -> Result<Vec<String>, DagValidationError> {
+        Self::validate(tasks)?;
+
+        let mut in_degree: HashMap<&str, usize> = HashMap::new();
+        let mut adj: HashMap<&str, Vec<&str>> = HashMap::new();
+
+        for task in tasks {
+            in_degree.entry(task.id.as_str()).or_insert(0);
+            for dep in &task.dependencies {
+                adj.entry(dep.as_str()).or_default().push(task.id.as_str());
+                *in_degree.entry(task.id.as_str()).or_insert(0) += 1;
+            }
+        }
+
+        let mut queue: std::collections::VecDeque<&str> = in_degree
+            .iter()
+            .filter(|&(_, &deg)| deg == 0)
+            .map(|(&id, _)| id)
+            .collect();
+
+        let mut sorted = Vec::new();
+
+        while let Some(node) = queue.pop_front() {
+            sorted.push(node.to_string());
+            if let Some(neighbors) = adj.get(node) {
+                for &next in neighbors {
+                    if let Some(deg) = in_degree.get_mut(next) {
+                        *deg -= 1;
+                        if *deg == 0 {
+                            queue.push_back(next);
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(sorted)
+    }
+}
 
 // ============================================================================
 // 4. Zero-Dependency Timestamp & Duration Formatting
@@ -274,23 +450,62 @@ pub fn format_duration_human(duration: Duration) -> String {
 // ============================================================================
 
 /// Thread-safe in-memory log buffer capturing subagent log output, preventing
-/// interlaced stdout corruption in concurrent multi-subagent scenarios.
+/// interlaced stdout corruption in concurrent multi-subagent scenarios, and
+/// optionally mirroring log entries to a disk-backed log file.
 #[derive(Clone, Debug, Default)]
 pub struct TaskLogBuffer {
     lines: Arc<RwLock<Vec<String>>>,
+    disk_path: Arc<RwLock<Option<std::path::PathBuf>>>,
 }
 
 impl TaskLogBuffer {
     pub fn new() -> Self {
         Self {
             lines: Arc::new(RwLock::new(Vec::new())),
+            disk_path: Arc::new(RwLock::new(None)),
         }
     }
 
-    /// Appends a log line to the buffer.
+    /// Creates a buffer that automatically appends logs to a disk file.
+    pub fn with_disk_path(path: impl Into<std::path::PathBuf>) -> Self {
+        Self {
+            lines: Arc::new(RwLock::new(Vec::new())),
+            disk_path: Arc::new(RwLock::new(Some(path.into()))),
+        }
+    }
+
+    /// Configures the disk log file path for an existing buffer.
+    pub fn set_disk_path(&self, path: impl Into<std::path::PathBuf>) {
+        let mut guard = self.disk_path.write().unwrap_or_else(|e| e.into_inner());
+        *guard = Some(path.into());
+    }
+
+    /// Appends a log line to the in-memory buffer and to disk if configured.
     pub fn push(&self, line: impl Into<String>) {
-        let mut guard = self.lines.write().unwrap_or_else(|e| e.into_inner());
-        guard.push(line.into());
+        let s = line.into();
+        {
+            let mut guard = self.lines.write().unwrap_or_else(|e| e.into_inner());
+            guard.push(s.clone());
+        }
+
+        let disk_opt = self
+            .disk_path
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
+        if let Some(ref path) = disk_opt {
+            if let Some(parent) = path.parent() {
+                let _ = std::fs::create_dir_all(parent);
+            }
+            if let Ok(mut file) = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(path)
+            {
+                use std::io::Write;
+                let _ = writeln!(file, "{}", s);
+            }
+        }
     }
 
     /// Alias for push.
@@ -362,17 +577,47 @@ impl TaskLogBuffer {
     }
 }
 
-/// Output routing destination supporting terminal stdout or buffered isolation.
+/// Events emitted during an agent execution turn for UI consumption (TUI / Channel).
+#[derive(Clone, Debug)]
+pub enum AgentUiEvent {
+    Text(String),
+    Spinner(String),
+    ClearSpinner,
+    ReasoningChunk(String),
+    ContentChunk(String),
+    ToolStarted {
+        name: String,
+        args: String,
+    },
+    ToolFinished {
+        name: String,
+        result: String,
+        success: bool,
+    },
+    TurnCompleted {
+        tools_executed: usize,
+        final_content: String,
+    },
+    Error(String),
+}
+
+/// Output routing destination supporting terminal stdout, buffered isolation, or TUI event channel.
 #[derive(Clone, Debug)]
 pub enum OutputSink {
     Terminal,
     Buffered(Arc<TaskLogBuffer>),
+    Channel(std::sync::mpsc::Sender<AgentUiEvent>),
 }
 
 impl OutputSink {
     /// Creates a new buffered output sink with the given log buffer.
     pub fn buffered(buffer: Arc<TaskLogBuffer>) -> Self {
         Self::Buffered(buffer)
+    }
+
+    /// Creates a new channel output sink.
+    pub fn channel(sender: std::sync::mpsc::Sender<AgentUiEvent>) -> Self {
+        Self::Channel(sender)
     }
 
     /// Emits a line of text to the target sink.
@@ -383,6 +628,9 @@ impl OutputSink {
             }
             Self::Buffered(buffer) => {
                 buffer.push(text);
+            }
+            Self::Channel(sender) => {
+                let _ = sender.send(AgentUiEvent::Text(text.to_string()));
             }
         }
     }
@@ -395,35 +643,59 @@ impl OutputSink {
 
     /// Returns true if this sink writes to an isolated buffer without touching stdout.
     pub fn is_silent(&self) -> bool {
-        matches!(self, Self::Buffered(_))
+        matches!(self, Self::Buffered(_) | Self::Channel(_))
+    }
+
+    /// Returns true if this sink writes to a TUI channel.
+    pub fn is_channel(&self) -> bool {
+        matches!(self, Self::Channel(_))
+    }
+
+    /// Sends an explicit AgentUiEvent if the sink is a channel.
+    pub fn send_event(&self, event: AgentUiEvent) {
+        if let Self::Channel(sender) = self {
+            let _ = sender.send(event);
+        }
     }
 
     /// Returns the underlying buffer if buffered.
     pub fn buffer(&self) -> Option<Arc<TaskLogBuffer>> {
         match self {
             Self::Buffered(buf) => Some(buf.clone()),
-            Self::Terminal => None,
+            _ => None,
         }
     }
 
-    /// Emits an ephemeral spinner line only if the sink is interactive (Terminal).
+    /// Emits an ephemeral spinner line only if the sink is interactive (Terminal or Channel).
     /// Suppressed completely when running with an isolated Buffered sink.
     pub fn emit_spinner(&self, text: &str) {
-        if !self.is_silent() {
-            use std::io::Write;
-            print!("{}", text);
-            let _ = std::io::stdout().flush();
+        match self {
+            Self::Terminal => {
+                use std::io::Write;
+                print!("{}", text);
+                let _ = std::io::stdout().flush();
+            }
+            Self::Channel(sender) => {
+                let _ = sender.send(AgentUiEvent::Spinner(text.to_string()));
+            }
+            Self::Buffered(_) => {}
         }
     }
 
-    /// Clears an ephemeral spinner line only if the sink is interactive (Terminal).
+    /// Clears an ephemeral spinner line only if the sink is interactive (Terminal or Channel).
     /// Suppressed completely when running with an isolated Buffered sink to avoid
     /// clearing user typing lines via `\r\x1B[K`.
     pub fn clear_spinner(&self) {
-        if !self.is_silent() {
-            use std::io::Write;
-            print!("\r\x1B[K");
-            let _ = std::io::stdout().flush();
+        match self {
+            Self::Terminal => {
+                use std::io::Write;
+                print!("\r\x1B[K");
+                let _ = std::io::stdout().flush();
+            }
+            Self::Channel(sender) => {
+                let _ = sender.send(AgentUiEvent::ClearSpinner);
+            }
+            Self::Buffered(_) => {}
         }
     }
 }
@@ -454,6 +726,8 @@ pub struct TaskSnapshot {
     pub error: Option<String>,
     #[serde(default)]
     pub notified: bool,
+    #[serde(default)]
+    pub dependencies: Vec<String>,
 }
 
 impl TaskSnapshot {
@@ -489,7 +763,10 @@ impl TaskSnapshot {
                         self.id, self.name, self.elapsed_human
                     );
                     if !self.description.is_empty() {
-                        out.push_str(&format!("\n   \x1B[90mDescription:\x1B[0m {}", self.description));
+                        out.push_str(&format!(
+                            "\n   \x1B[90mDescription:\x1B[0m {}",
+                            self.description
+                        ));
                     }
                     out
                 }
@@ -505,9 +782,15 @@ impl TaskSnapshot {
                         self.id, self.name, self.elapsed_human
                     );
                     if !self.description.is_empty() {
-                        out.push_str(&format!("\n   \x1B[90mDescription:\x1B[0m {}", self.description));
+                        out.push_str(&format!(
+                            "\n   \x1B[90mDescription:\x1B[0m {}",
+                            self.description
+                        ));
                     }
-                    out.push_str(&format!("\n   \x1B[90mError:\x1B[0m \x1B[31m{}\x1B[0m", err_preview));
+                    out.push_str(&format!(
+                        "\n   \x1B[90mError:\x1B[0m \x1B[31m{}\x1B[0m",
+                        err_preview
+                    ));
                     out
                 }
                 TaskStatus::Cancelled => {
@@ -516,7 +799,10 @@ impl TaskSnapshot {
                         self.id, self.name, self.elapsed_human
                     );
                     if !self.description.is_empty() {
-                        out.push_str(&format!("\n   \x1B[90mDescription:\x1B[0m {}", self.description));
+                        out.push_str(&format!(
+                            "\n   \x1B[90mDescription:\x1B[0m {}",
+                            self.description
+                        ));
                     }
                     out
                 }
@@ -600,6 +886,8 @@ pub struct TaskRecord {
     pub cancellation_token: CancellationToken,
     pub logs: Arc<TaskLogBuffer>,
     pub notified: bool,
+    pub dependencies: Vec<String>,
+    pub worker_done: bool,
 }
 
 impl TaskRecord {
@@ -607,6 +895,24 @@ impl TaskRecord {
         id: impl Into<String>,
         name: impl Into<String>,
         description: impl Into<String>,
+        cancellation_token: CancellationToken,
+        logs: Arc<TaskLogBuffer>,
+    ) -> Self {
+        Self::new_with_dependencies(
+            id,
+            name,
+            description,
+            Vec::new(),
+            cancellation_token,
+            logs,
+        )
+    }
+
+    pub fn new_with_dependencies(
+        id: impl Into<String>,
+        name: impl Into<String>,
+        description: impl Into<String>,
+        dependencies: Vec<String>,
         cancellation_token: CancellationToken,
         logs: Arc<TaskLogBuffer>,
     ) -> Self {
@@ -625,6 +931,8 @@ impl TaskRecord {
             cancellation_token,
             logs,
             notified: false,
+            dependencies,
+            worker_done: false,
         }
     }
 
@@ -686,11 +994,11 @@ impl TaskRecord {
         self.status = TaskStatus::Failed;
         let now = SystemTime::now();
         self.finished_at = Some(now);
-        self.duration = Some(
-            self.started_instant
-                .map(|inst| inst.elapsed())
-                .unwrap_or_else(|| now.duration_since(self.created_at).unwrap_or_default()),
-        );
+        self.duration = self
+            .started_instant
+            .map(|inst| inst.elapsed())
+            .or_else(|| now.duration_since(self.created_at).ok())
+            .or(Some(Duration::ZERO));
         self.error = Some(err);
         Ok(())
     }
@@ -703,11 +1011,11 @@ impl TaskRecord {
         self.status = TaskStatus::Cancelled;
         let now = SystemTime::now();
         self.finished_at = Some(now);
-        self.duration = Some(
-            self.started_instant
-                .map(|inst| inst.elapsed())
-                .unwrap_or_else(|| now.duration_since(self.created_at).unwrap_or_default()),
-        );
+        self.duration = self
+            .started_instant
+            .map(|inst| inst.elapsed())
+            .or_else(|| now.duration_since(self.created_at).ok())
+            .or(Some(Duration::ZERO));
         self.cancellation_token.cancel();
         if let Some(r) = reason {
             self.error = Some(format!("Cancelled: {}", r));
@@ -759,6 +1067,7 @@ impl TaskRecord {
             result: self.result.clone(),
             error: self.error.clone(),
             notified: self.notified,
+            dependencies: self.dependencies.clone(),
         }
     }
 }
@@ -777,6 +1086,7 @@ pub struct TaskInner {
     pub record: Mutex<TaskRecord>,
     pub notify: Condvar,
     pub log_buffer: Arc<TaskLogBuffer>,
+    pub dependencies: Vec<String>,
 }
 
 impl TaskInner {
@@ -786,14 +1096,21 @@ impl TaskInner {
     }
 }
 
+thread_local! {
+    static CUSTOM_TASKS_DIR: std::cell::RefCell<Option<std::path::PathBuf>> = const { std::cell::RefCell::new(None) };
+}
+
 static GLOBAL_TASK_MANAGER: OnceLock<TaskManager> = OnceLock::new();
 
 /// Thread-safe task manager providing non-blocking subagent spawning,
-/// condvar-based awaiting with timeout handling, cancellation, and pruning.
-#[derive(Debug)]
+/// condvar-based awaiting with timeout handling, cancellation, pruning,
+/// DAG dependency sequencing, and disk-backed persistence.
+#[derive(Debug, Clone)]
 pub struct TaskManager {
-    counter: AtomicUsize,
-    tasks: RwLock<HashMap<String, Arc<TaskInner>>>,
+    counter: Arc<AtomicUsize>,
+    tasks: Arc<RwLock<HashMap<String, Arc<TaskInner>>>>,
+    persist_dir: Arc<RwLock<Option<std::path::PathBuf>>>,
+    file_lock: Arc<Mutex<()>>,
 }
 
 impl Default for TaskManager {
@@ -803,17 +1120,282 @@ impl Default for TaskManager {
 }
 
 impl TaskManager {
-    /// Creates an isolated TaskManager instance (ideal for independent testing).
+    /// Creates an isolated TaskManager instance.
     pub fn new() -> Self {
-        Self {
-            counter: AtomicUsize::new(1),
-            tasks: RwLock::new(HashMap::new()),
+        let default_dir = Self::resolve_default_persist_dir();
+        let tm = Self {
+            counter: Arc::new(AtomicUsize::new(1)),
+            tasks: Arc::new(RwLock::new(HashMap::new())),
+            persist_dir: Arc::new(RwLock::new(default_dir.clone())),
+            file_lock: Arc::new(Mutex::new(())),
+        };
+        if let Some(ref dir) = default_dir {
+            let tasks_file = dir.join("tasks.jsonl");
+            if tasks_file.exists() {
+                let _ = tm.load_and_reconcile_from_file(&tasks_file);
+            }
         }
+        tm
     }
 
     /// Accesses the global singleton instance across the CLI process.
     pub fn global() -> &'static TaskManager {
         GLOBAL_TASK_MANAGER.get_or_init(TaskManager::new)
+    }
+
+    /// Resolves the default persistence directory for tasks.
+    fn resolve_default_persist_dir() -> Option<std::path::PathBuf> {
+        if let Some(dir) = CUSTOM_TASKS_DIR.with(|c| c.borrow().clone()) {
+            return Some(dir);
+        }
+        if let Ok(env_dir) = std::env::var("CTRL_TASKS_DIR") {
+            if !env_dir.trim().is_empty() {
+                return Some(std::path::PathBuf::from(env_dir));
+            }
+        }
+        #[cfg(test)]
+        {
+            None
+        }
+        #[cfg(not(test))]
+        {
+            let current = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+            Some(current.join(".ctrl"))
+        }
+    }
+
+    /// Creates a TaskManager with an explicit persistence directory.
+    pub fn with_dir(dir: std::path::PathBuf) -> Self {
+        let tm = Self {
+            counter: Arc::new(AtomicUsize::new(1)),
+            tasks: Arc::new(RwLock::new(HashMap::new())),
+            persist_dir: Arc::new(RwLock::new(Some(dir.clone()))),
+            file_lock: Arc::new(Mutex::new(())),
+        };
+        let tasks_file = dir.join("tasks.jsonl");
+        if tasks_file.exists() {
+            let _ = tm.load_and_reconcile_from_file(&tasks_file);
+        }
+        tm
+    }
+
+    /// Loads task history and reconciles in-flight tasks from a project or .ctrl directory.
+    pub fn load_from_disk(path: &std::path::Path) -> anyhow::Result<Self> {
+        let (dir, tasks_file) = if path.is_file() {
+            (
+                path.parent().unwrap_or(path).to_path_buf(),
+                path.to_path_buf(),
+            )
+        } else if path.join("tasks.jsonl").exists() {
+            (path.to_path_buf(), path.join("tasks.jsonl"))
+        } else if path.join(".ctrl").join("tasks.jsonl").exists() {
+            (path.join(".ctrl"), path.join(".ctrl").join("tasks.jsonl"))
+        } else if path.ends_with(".ctrl") {
+            (path.to_path_buf(), path.join("tasks.jsonl"))
+        } else {
+            (path.join(".ctrl"), path.join(".ctrl").join("tasks.jsonl"))
+        };
+
+        let tm = Self {
+            counter: Arc::new(AtomicUsize::new(1)),
+            tasks: Arc::new(RwLock::new(HashMap::new())),
+            persist_dir: Arc::new(RwLock::new(Some(dir))),
+            file_lock: Arc::new(Mutex::new(())),
+        };
+
+        if tasks_file.exists() {
+            tm.load_and_reconcile_from_file(&tasks_file)?;
+        }
+
+        Ok(tm)
+    }
+
+    /// Runs a closure with a scoped thread-local tasks persistence directory.
+    pub fn with_tasks_dir<F, R>(dir: std::path::PathBuf, f: F) -> R
+    where
+        F: FnOnce() -> R,
+    {
+        CUSTOM_TASKS_DIR.with(|c| {
+            *c.borrow_mut() = Some(dir);
+        });
+        let result = f();
+        CUSTOM_TASKS_DIR.with(|c| {
+            *c.borrow_mut() = None;
+        });
+        result
+    }
+
+    /// Sets or clears the persistence directory for this manager instance.
+    pub fn set_persist_dir(&self, dir: Option<std::path::PathBuf>) {
+        let mut p = self.persist_dir.write().unwrap_or_else(|e| e.into_inner());
+        *p = dir;
+    }
+
+    /// Appends a snapshot line to tasks.jsonl if persistence is active.
+    pub fn persist_snapshot(&self, snapshot: &TaskSnapshot) -> anyhow::Result<()> {
+        let dir_opt = self
+            .persist_dir
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
+        if let Some(dir) = dir_opt {
+            let _guard = self.file_lock.lock().unwrap_or_else(|e| e.into_inner());
+            std::fs::create_dir_all(&dir)?;
+            let tasks_file = dir.join("tasks.jsonl");
+            let mut file = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(tasks_file)?;
+            use std::io::Write;
+            let line = serde_json::to_string(snapshot)?;
+            writeln!(file, "{}", line)?;
+        }
+        Ok(())
+    }
+
+    /// Static alias persisting to the global singleton persistence store.
+    pub fn persist_global_snapshot(snapshot: &TaskSnapshot) -> anyhow::Result<()> {
+        Self::global().persist_snapshot(snapshot)
+    }
+
+    /// Appends a log line to a task's in-memory buffer and/or disk file.
+    pub fn append_task_log(&self, id: &str, log_line: &str) -> anyhow::Result<()> {
+        if let Some(task) = self.get_inner(id) {
+            task.log_buffer.push(log_line);
+            return Ok(());
+        }
+
+        let dir_opt = self
+            .persist_dir
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
+        if let Some(dir) = dir_opt {
+            let logs_dir = dir.join("tasks");
+            std::fs::create_dir_all(&logs_dir)?;
+            let log_file = logs_dir.join(format!("{}.log", id));
+            let mut file = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(log_file)?;
+            use std::io::Write;
+            writeln!(file, "{}", log_line)?;
+        }
+        Ok(())
+    }
+
+    /// Loads all lines from tasks.jsonl, reconciles crashes, synchronizes monotonic counter,
+    /// and populates the in-memory registry.
+    fn load_and_reconcile_from_file(&self, tasks_file: &std::path::Path) -> anyhow::Result<()> {
+        let content = std::fs::read_to_string(tasks_file)?;
+        let mut latest_snapshots: HashMap<String, TaskSnapshot> = HashMap::new();
+        let mut max_id: usize = 0;
+
+        for line in content.lines() {
+            let line = line.trim();
+            if line.is_empty() {
+                continue;
+            }
+            if let Ok(snap) = serde_json::from_str::<TaskSnapshot>(line) {
+                if let Some(num_str) = snap.id.strip_prefix("task-") {
+                    if let Ok(num) = num_str.parse::<usize>() {
+                        max_id = max_id.max(num);
+                    }
+                }
+                latest_snapshots.insert(snap.id.clone(), snap);
+            }
+        }
+
+        let mut reconciled = Vec::new();
+        let now_str = format_utc_timestamp(SystemTime::now());
+
+        for (_, mut snap) in latest_snapshots {
+            let mut modified = false;
+            match snap.status {
+                TaskStatus::Running => {
+                    snap.status = TaskStatus::Failed;
+                    snap.error = Some(
+                        "Task interrupted: process terminated during execution / orphaned on startup recovery"
+                            .to_string(),
+                    );
+                    if snap.finished_at.is_none() {
+                        snap.finished_at = Some(now_str.clone());
+                    }
+                    modified = true;
+                }
+                TaskStatus::Queued => {
+                    snap.status = TaskStatus::Failed;
+                    snap.error = Some(
+                        "Task was never started before process termination".to_string(),
+                    );
+                    if snap.finished_at.is_none() {
+                        snap.finished_at = Some(now_str.clone());
+                    }
+                    modified = true;
+                }
+                _ => {}
+            }
+            if modified {
+                let _ = self.persist_snapshot(&snap);
+            }
+            reconciled.push(snap);
+        }
+
+        self.counter.store(max_id + 1, Ordering::SeqCst);
+
+        let dir_opt = self
+            .persist_dir
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
+        let mut tasks_map = self.write_tasks();
+
+        for snap in reconciled {
+            let token = CancellationToken::new();
+            if snap.status == TaskStatus::Cancelled {
+                token.cancel();
+            }
+
+            let log_path = dir_opt
+                .as_ref()
+                .map(|d| d.join("tasks").join(format!("{}.log", snap.id)));
+            let log_buffer = match log_path {
+                Some(p) => Arc::new(TaskLogBuffer::with_disk_path(p)),
+                None => Arc::new(TaskLogBuffer::new()),
+            };
+
+            let mut rec = TaskRecord::new_with_dependencies(
+                snap.id.clone(),
+                snap.name.clone(),
+                snap.description.clone(),
+                snap.dependencies.clone(),
+                token.clone(),
+                log_buffer.clone(),
+            );
+            rec.status = snap.status;
+            rec.result = snap.result.clone();
+            rec.error = snap.error.clone();
+            rec.notified = snap.notified;
+            rec.worker_done = true;
+            if let Some(d_ms) = snap.duration_ms {
+                rec.duration = Some(Duration::from_millis(d_ms));
+            }
+
+            let inner = Arc::new(TaskInner {
+                id: snap.id.clone(),
+                name: snap.name.clone(),
+                description: snap.description.clone(),
+                cancellation_token: token,
+                record: Mutex::new(rec),
+                notify: Condvar::new(),
+                log_buffer,
+                dependencies: snap.dependencies,
+            });
+
+            tasks_map.insert(snap.id, inner);
+        }
+
+        Ok(())
     }
 
     fn read_tasks(&self) -> RwLockReadGuard<'_, HashMap<String, Arc<TaskInner>>> {
@@ -830,14 +1412,32 @@ impl TaskManager {
         tasks.get(id).cloned()
     }
 
-    /// Spawns a new background task providing both `CancellationToken` and dedicated
-    /// `Arc<TaskLogBuffer>` to the runner closure.
-    ///
-    /// Returns the assigned `TaskId`, `CancellationToken`, and `Arc<TaskLogBuffer>`.
-    pub fn spawn_task_with_sink<F>(
+    /// Spawns a background task with explicit prerequisite task dependencies.
+    pub fn spawn_task_with_dependencies<F>(
         &self,
         name: String,
         description: String,
+        dependencies: Vec<String>,
+        runner: F,
+    ) -> Result<(TaskId, CancellationToken), TaskError>
+    where
+        F: FnOnce(CancellationToken) -> anyhow::Result<String> + Send + 'static,
+    {
+        self.spawn_task_with_dependencies_and_sink(
+            name,
+            description,
+            dependencies,
+            move |token, _logs| runner(token),
+        )
+        .map(|(id, token, _logs)| (id, token))
+    }
+
+    /// Spawns a background task with prerequisite task dependencies and dedicated TaskLogBuffer sink.
+    pub fn spawn_task_with_dependencies_and_sink<F>(
+        &self,
+        name: String,
+        description: String,
+        dependencies: Vec<String>,
         runner: F,
     ) -> Result<(TaskId, CancellationToken, Arc<TaskLogBuffer>), TaskError>
     where
@@ -845,13 +1445,62 @@ impl TaskManager {
     {
         let id_num = self.counter.fetch_add(1, Ordering::SeqCst);
         let id = format!("task-{}", id_num);
-        let token = CancellationToken::new();
-        let logs = Arc::new(TaskLogBuffer::new());
 
-        let record = TaskRecord::new(
+        // 1. Check self-dependency
+        if dependencies.contains(&id) {
+            return Err(TaskError::CyclicDependency(vec![id.clone(), id]));
+        }
+
+        // 2. Validate prerequisites and acyclicity
+        {
+            let tasks = self.read_tasks();
+            for dep in &dependencies {
+                if !tasks.contains_key(dep) {
+                    return Err(TaskError::MissingDependency {
+                        task: id,
+                        missing: dep.clone(),
+                    });
+                }
+            }
+
+            let mut dag_tasks = Vec::with_capacity(tasks.len() + 1);
+            for (t_id, t_inner) in tasks.iter() {
+                dag_tasks.push(DagTask {
+                    id: t_id.clone(),
+                    dependencies: t_inner.dependencies.clone(),
+                });
+            }
+            dag_tasks.push(DagTask {
+                id: id.clone(),
+                dependencies: dependencies.clone(),
+            });
+
+            if let Err(DagValidationError::CycleDetected(cycle)) =
+                DagValidator::validate(&dag_tasks)
+            {
+                return Err(TaskError::CyclicDependency(cycle));
+            }
+        }
+
+        let token = CancellationToken::new();
+        let dir_opt = self
+            .persist_dir
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
+        let log_path = dir_opt
+            .as_ref()
+            .map(|d| d.join("tasks").join(format!("{}.log", id)));
+        let logs = match log_path {
+            Some(p) => Arc::new(TaskLogBuffer::with_disk_path(p)),
+            None => Arc::new(TaskLogBuffer::new()),
+        };
+
+        let record = TaskRecord::new_with_dependencies(
             id.clone(),
             name.clone(),
             description.clone(),
+            dependencies.clone(),
             token.clone(),
             logs.clone(),
         );
@@ -864,35 +1513,64 @@ impl TaskManager {
             record: Mutex::new(record),
             notify: Condvar::new(),
             log_buffer: logs.clone(),
+            dependencies: dependencies.clone(),
         });
 
-        // Insert into registry (lock released immediately)
         {
             let mut tasks = self.write_tasks();
             tasks.insert(id.clone(), task_inner.clone());
+        }
+
+        // Persist initial Queued snapshot
+        {
+            let rec = task_inner.lock_record();
+            let snap = rec.snapshot();
+            let _ = self.persist_snapshot(&snap);
         }
 
         let worker_task = task_inner.clone();
         let worker_token = token.clone();
         let worker_logs = logs.clone();
         let thread_name = format!("task-worker-{}", id);
+        let manager_clone = self.clone();
 
-        let spawn_res = thread::Builder::new()
-            .name(thread_name)
-            .spawn(move || {
-                Self::run_worker_thread_with_sink(worker_task, worker_token, worker_logs, runner);
-            });
+        let spawn_res = thread::Builder::new().name(thread_name).spawn(move || {
+            Self::run_worker_thread_with_dependencies(
+                manager_clone,
+                worker_task,
+                worker_token,
+                worker_logs,
+                dependencies,
+                runner,
+            );
+        });
 
         match spawn_res {
             Ok(_handle) => Ok((id, token, logs)),
             Err(e) => {
                 let mut rec = task_inner.lock_record();
                 let _ = rec.mark_failed(format!("Failed to spawn worker thread: {}", e));
+                let snap = rec.snapshot();
                 drop(rec);
+                let _ = self.persist_snapshot(&snap);
                 task_inner.notify.notify_all();
                 Err(TaskError::SpawnFailed(e.to_string()))
             }
         }
+    }
+
+    /// Spawns a new background task providing both `CancellationToken` and dedicated
+    /// `Arc<TaskLogBuffer>` to the runner closure.
+    pub fn spawn_task_with_sink<F>(
+        &self,
+        name: String,
+        description: String,
+        runner: F,
+    ) -> Result<(TaskId, CancellationToken, Arc<TaskLogBuffer>), TaskError>
+    where
+        F: FnOnce(CancellationToken, Arc<TaskLogBuffer>) -> anyhow::Result<String> + Send + 'static,
+    {
+        self.spawn_task_with_dependencies_and_sink(name, description, Vec::new(), runner)
     }
 
     /// Backward-compatible wrapper around `spawn_task_with_sink`.
@@ -910,39 +1588,89 @@ impl TaskManager {
             .map(|(id, token, _logs)| (id, token))
     }
 
-    /// Worker thread routine executing the runner closure with `catch_unwind`.
-    fn run_worker_thread_with_sink<F>(
+    /// Worker thread routine executing the runner closure with `catch_unwind` and dependency resolution.
+    fn run_worker_thread_with_dependencies<F>(
+        manager: TaskManager,
         task: Arc<TaskInner>,
         token: CancellationToken,
         logs: Arc<TaskLogBuffer>,
+        dependencies: Vec<String>,
         runner: F,
     ) where
         F: FnOnce(CancellationToken, Arc<TaskLogBuffer>) -> anyhow::Result<String> + Send + 'static,
     {
-        // 1. Transition Queued -> Running
+        // 1. Await prerequisite dependencies
+        for dep_id in &dependencies {
+            if token.is_cancelled() {
+                let mut rec = task.lock_record();
+                let _ = rec.mark_cancelled(Some("Cancelled while waiting for prerequisite tasks".into()));
+                let snap = rec.snapshot();
+                drop(rec);
+                let _ = manager.persist_snapshot(&snap);
+                task.notify.notify_all();
+                return;
+            }
+
+            let dep_snap = match manager.await_task(dep_id, None) {
+                Ok(s) => s,
+                Err(e) => {
+                    let mut rec = task.lock_record();
+                    let _ = rec.mark_failed(format!("Error awaiting prerequisite '{}': {}", dep_id, e));
+                    let snap = rec.snapshot();
+                    drop(rec);
+                    let _ = manager.persist_snapshot(&snap);
+                    task.notify.notify_all();
+                    return;
+                }
+            };
+
+            if dep_snap.status != TaskStatus::Completed {
+                let mut rec = task.lock_record();
+                if dep_snap.status == TaskStatus::Cancelled {
+                    let _ = rec.mark_cancelled(Some(format!("Prerequisite '{}' was cancelled", dep_id)));
+                } else {
+                    let err_msg = dep_snap.error.unwrap_or_else(|| "Prerequisite task failed".into());
+                    let _ = rec.mark_failed(format!("Prerequisite '{}' failed: {}", dep_id, err_msg));
+                }
+                let snap = rec.snapshot();
+                drop(rec);
+                let _ = manager.persist_snapshot(&snap);
+                task.notify.notify_all();
+                return;
+            }
+        }
+
+        // 2. Transition Queued -> Running
         {
             let mut rec = task.lock_record();
             if token.is_cancelled() || rec.status == TaskStatus::Cancelled {
                 let _ = rec.mark_cancelled(Some("Cancelled before starting".into()));
+                let snap = rec.snapshot();
                 drop(rec);
+                let _ = manager.persist_snapshot(&snap);
                 task.notify.notify_all();
                 return;
             }
             if rec.mark_running().is_err() {
+                let snap = rec.snapshot();
                 drop(rec);
+                let _ = manager.persist_snapshot(&snap);
                 task.notify.notify_all();
                 return;
             }
+            let snap = rec.snapshot();
             drop(rec);
+            let _ = manager.persist_snapshot(&snap);
             task.notify.notify_all();
         }
 
-        // 2. Execute runner with catch_unwind (NO MUTEX HELD!)
+        // 3. Execute runner closure with catch_unwind (NO MUTEX HELD!)
         let outcome = panic::catch_unwind(AssertUnwindSafe(|| runner(token.clone(), logs)));
 
-        // 3. Re-acquire record lock and update terminal state
+        // 4. Update terminal state
         {
             let mut rec = task.lock_record();
+            rec.worker_done = true;
             match outcome {
                 Ok(Ok(output)) => {
                     if token.is_cancelled() {
@@ -969,9 +1697,12 @@ impl TaskManager {
                     let _ = rec.mark_failed(format!("Panicked: {}", panic_msg));
                 }
             }
+            let snap = rec.snapshot();
+            drop(rec);
+            let _ = manager.persist_snapshot(&snap);
         }
 
-        // 4. Notify all waiters outside the mutex
+        // 5. Notify all waiters outside the mutex
         task.notify.notify_all();
     }
 
@@ -987,13 +1718,15 @@ impl TaskManager {
 
         let mut rec = task.lock_record();
 
-        if rec.status.is_terminal() {
+        let is_done = |r: &TaskRecord| r.status.is_terminal() && (r.started_at.is_none() || r.worker_done);
+
+        if is_done(&rec) {
             return Ok(rec.snapshot());
         }
 
         match timeout {
             None => {
-                while !rec.status.is_terminal() {
+                while !is_done(&rec) {
                     rec = task.notify.wait(rec).unwrap_or_else(|e| e.into_inner());
                 }
                 Ok(rec.snapshot())
@@ -1001,7 +1734,7 @@ impl TaskManager {
             Some(dur) => {
                 let start = Instant::now();
 
-                while !rec.status.is_terminal() {
+                while !is_done(&rec) {
                     let elapsed = start.elapsed();
                     if elapsed >= dur {
                         return Err(TaskError::Timeout(dur));
@@ -1015,7 +1748,7 @@ impl TaskManager {
 
                     rec = new_rec;
 
-                    if rec.status.is_terminal() {
+                    if is_done(&rec) {
                         return Ok(rec.snapshot());
                     }
 
@@ -1091,11 +1824,16 @@ impl TaskManager {
 
         task.cancellation_token.cancel();
 
-        if rec.status == TaskStatus::Queued {
-            let _ = rec.mark_cancelled(Some("Cancelled while queued".into()));
-            drop(rec);
-            task.notify.notify_all();
-        }
+        let reason = if rec.status == TaskStatus::Queued {
+            "Cancelled while queued"
+        } else {
+            "Cancelled while running"
+        };
+        let _ = rec.mark_cancelled(Some(reason.into()));
+        let snap = rec.snapshot();
+        drop(rec);
+        let _ = self.persist_snapshot(&snap);
+        task.notify.notify_all();
 
         Ok(())
     }
@@ -1131,14 +1869,12 @@ impl TaskManager {
 
         // Sort numerically by task ID if prefixed with "task-", otherwise lexicographically
         snapshots.sort_by(|a, b| {
-            let num_a = a
-                .id
-                .strip_prefix("task-")
-                .and_then(|s| s.parse::<usize>().ok());
-            let num_b = b
-                .id
-                .strip_prefix("task-")
-                .and_then(|s| s.parse::<usize>().ok());
+            let num_a =
+                a.id.strip_prefix("task-")
+                    .and_then(|s| s.parse::<usize>().ok());
+            let num_b =
+                b.id.strip_prefix("task-")
+                    .and_then(|s| s.parse::<usize>().ok());
             match (num_a, num_b) {
                 (Some(na), Some(nb)) => na.cmp(&nb),
                 _ => a.id.cmp(&b.id),
@@ -1148,10 +1884,38 @@ impl TaskManager {
         snapshots
     }
 
-    /// Retrieves log lines for a specific task.
+    /// Retrieves log lines for a specific task. Falls back to reading from disk
+    /// (`<persist_dir>/tasks/<id>.log`) if restored from disk or in-memory is empty.
     pub fn get_task_logs(&self, id: &str) -> Option<Vec<String>> {
-        let task = self.get_inner(id)?;
-        Some(task.log_buffer.lines())
+        if let Some(task) = self.get_inner(id) {
+            let lines = task.log_buffer.lines();
+            if !lines.is_empty() {
+                return Some(lines);
+            }
+        }
+
+        let dir_opt = self
+            .persist_dir
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
+        if let Some(dir) = dir_opt {
+            let log_file = dir.join("tasks").join(format!("{}.log", id));
+            if log_file.exists() {
+                if let Ok(file) = std::fs::File::open(log_file) {
+                    use std::io::BufRead;
+                    let reader = std::io::BufReader::new(file);
+                    let lines: Vec<String> = reader.lines().map_while(Result::ok).collect();
+                    return Some(lines);
+                }
+            }
+        }
+
+        if self.get_inner(id).is_some() {
+            return Some(Vec::new());
+        }
+
+        None
     }
 
     /// Clears all terminal tasks from the registry. Returns number of tasks removed.
@@ -1228,14 +1992,12 @@ impl TaskManager {
 
         // Sort numerically by task ID if prefixed with "task-", otherwise lexicographically
         unnotified.sort_by(|a, b| {
-            let num_a = a
-                .id
-                .strip_prefix("task-")
-                .and_then(|s| s.parse::<usize>().ok());
-            let num_b = b
-                .id
-                .strip_prefix("task-")
-                .and_then(|s| s.parse::<usize>().ok());
+            let num_a =
+                a.id.strip_prefix("task-")
+                    .and_then(|s| s.parse::<usize>().ok());
+            let num_b =
+                b.id.strip_prefix("task-")
+                    .and_then(|s| s.parse::<usize>().ok());
             match (num_a, num_b) {
                 (Some(na), Some(nb)) => na.cmp(&nb),
                 _ => a.id.cmp(&b.id),
@@ -1261,14 +2023,12 @@ impl TaskManager {
         }
 
         unnotified.sort_by(|a, b| {
-            let num_a = a
-                .id
-                .strip_prefix("task-")
-                .and_then(|s| s.parse::<usize>().ok());
-            let num_b = b
-                .id
-                .strip_prefix("task-")
-                .and_then(|s| s.parse::<usize>().ok());
+            let num_a =
+                a.id.strip_prefix("task-")
+                    .and_then(|s| s.parse::<usize>().ok());
+            let num_b =
+                b.id.strip_prefix("task-")
+                    .and_then(|s| s.parse::<usize>().ok());
             match (num_a, num_b) {
                 (Some(na), Some(nb)) => na.cmp(&nb),
                 _ => a.id.cmp(&b.id),
@@ -1352,11 +2112,23 @@ mod tests {
 
         // 5. FromStr parsing (supporting both US and UK spellings)
         assert_eq!("queued".parse::<TaskStatus>().unwrap(), TaskStatus::Queued);
-        assert_eq!("running".parse::<TaskStatus>().unwrap(), TaskStatus::Running);
-        assert_eq!("completed".parse::<TaskStatus>().unwrap(), TaskStatus::Completed);
+        assert_eq!(
+            "running".parse::<TaskStatus>().unwrap(),
+            TaskStatus::Running
+        );
+        assert_eq!(
+            "completed".parse::<TaskStatus>().unwrap(),
+            TaskStatus::Completed
+        );
         assert_eq!("failed".parse::<TaskStatus>().unwrap(), TaskStatus::Failed);
-        assert_eq!("cancelled".parse::<TaskStatus>().unwrap(), TaskStatus::Cancelled);
-        assert_eq!("canceled".parse::<TaskStatus>().unwrap(), TaskStatus::Cancelled);
+        assert_eq!(
+            "cancelled".parse::<TaskStatus>().unwrap(),
+            TaskStatus::Cancelled
+        );
+        assert_eq!(
+            "canceled".parse::<TaskStatus>().unwrap(),
+            TaskStatus::Cancelled
+        );
         assert!("invalid_state".parse::<TaskStatus>().is_err());
     }
 
@@ -1472,16 +2244,20 @@ mod tests {
         let iter_clone = iterations.clone();
 
         let (id, _token) = manager
-            .spawn_task("loop-task".into(), "cancellable work".into(), move |token| {
-                for _ in 0..100 {
-                    iter_clone.fetch_add(1, Ordering::SeqCst);
-                    if token.is_cancelled() {
-                        return Err(anyhow::anyhow!("stopped via cancellation token"));
+            .spawn_task(
+                "loop-task".into(),
+                "cancellable work".into(),
+                move |token| {
+                    for _ in 0..100 {
+                        iter_clone.fetch_add(1, Ordering::SeqCst);
+                        if token.is_cancelled() {
+                            return Err(anyhow::anyhow!("stopped via cancellation token"));
+                        }
+                        thread::sleep(Duration::from_millis(10));
                     }
-                    thread::sleep(Duration::from_millis(10));
-                }
-                Ok("finished full loop".to_string())
-            })
+                    Ok("finished full loop".to_string())
+                },
+            )
             .unwrap();
 
         // Deterministically wait until task enters Running
@@ -1489,9 +2265,23 @@ mod tests {
             .await_running(&id, Some(Duration::from_secs(2)))
             .expect("Task must start running");
 
+        // Poll until get_task confirms Running state
+        let poll_start = Instant::now();
+        while manager.get_task(&id).map(|s| s.status) != Some(TaskStatus::Running)
+            && poll_start.elapsed() < Duration::from_secs(2)
+        {
+            thread::sleep(Duration::from_millis(1));
+        }
+        assert_eq!(
+            manager.get_task(&id).map(|s| s.status),
+            Some(TaskStatus::Running),
+            "Task must reach Running state before cancellation"
+        );
+
         // Wait until worker has executed at least 2 iterations
         let wait_start = Instant::now();
-        while iterations.load(Ordering::SeqCst) < 2 && wait_start.elapsed() < Duration::from_secs(2) {
+        while iterations.load(Ordering::SeqCst) < 2 && wait_start.elapsed() < Duration::from_secs(2)
+        {
             thread::sleep(Duration::from_millis(1));
         }
         assert!(
@@ -1652,6 +2442,11 @@ mod tests {
 
         // Task should still be running
         let snap = manager.get_task(&id).expect("Task must still exist");
+        assert!(
+            snap.status.is_active(),
+            "Task should still be active, status was {:?}",
+            snap.status
+        );
         assert_eq!(snap.status, TaskStatus::Running);
 
         // Awaiting with larger timeout completes normally
@@ -1690,10 +2485,14 @@ mod tests {
     fn test_queued_task_cancellation_via_manager_duration_guarantee() {
         let manager = TaskManager::new();
         let (id, _) = manager
-            .spawn_task("queued-cancel-mgr".into(), "cancel immediately".into(), |_| {
-                thread::sleep(Duration::from_millis(200));
-                Ok("ok".into())
-            })
+            .spawn_task(
+                "queued-cancel-mgr".into(),
+                "cancel immediately".into(),
+                |_| {
+                    thread::sleep(Duration::from_millis(200));
+                    Ok("ok".into())
+                },
+            )
             .unwrap();
 
         // Immediately cancel via cancel helper
@@ -2131,11 +2930,23 @@ mod tests {
         assert_eq!(TaskStatus::Cancelled.to_string(), "cancelled");
 
         assert_eq!(TaskStatus::from_str("queued").unwrap(), TaskStatus::Queued);
-        assert_eq!(TaskStatus::from_str("RUNNING").unwrap(), TaskStatus::Running);
-        assert_eq!(TaskStatus::from_str("completed").unwrap(), TaskStatus::Completed);
+        assert_eq!(
+            TaskStatus::from_str("RUNNING").unwrap(),
+            TaskStatus::Running
+        );
+        assert_eq!(
+            TaskStatus::from_str("completed").unwrap(),
+            TaskStatus::Completed
+        );
         assert_eq!(TaskStatus::from_str("failed").unwrap(), TaskStatus::Failed);
-        assert_eq!(TaskStatus::from_str("cancelled").unwrap(), TaskStatus::Cancelled);
-        assert_eq!(TaskStatus::from_str("canceled").unwrap(), TaskStatus::Cancelled);
+        assert_eq!(
+            TaskStatus::from_str("cancelled").unwrap(),
+            TaskStatus::Cancelled
+        );
+        assert_eq!(
+            TaskStatus::from_str("canceled").unwrap(),
+            TaskStatus::Cancelled
+        );
         assert!(TaskStatus::from_str("unknown_status").is_err());
     }
 
@@ -2197,7 +3008,9 @@ mod tests {
         assert!(record.started_at.is_some());
 
         // Running -> Completed
-        record.mark_completed("Done successfully".to_string()).unwrap();
+        record
+            .mark_completed("Done successfully".to_string())
+            .unwrap();
         assert_eq!(record.status, TaskStatus::Completed);
         assert_eq!(record.result.as_deref(), Some("Done successfully"));
         assert!(record.finished_at.is_some());
@@ -2212,10 +3025,11 @@ mod tests {
     fn test_cancellation_while_queued() {
         let token = CancellationToken::new();
         let logs = Arc::new(TaskLogBuffer::new());
-        let mut record =
-            TaskRecord::new("task_2", "cancel_queued", "desc", token.clone(), logs);
+        let mut record = TaskRecord::new("task_2", "cancel_queued", "desc", token.clone(), logs);
 
-        record.mark_cancelled(Some("User cancelled".into())).unwrap();
+        record
+            .mark_cancelled(Some("User cancelled".into()))
+            .unwrap();
         assert_eq!(record.status, TaskStatus::Cancelled);
         assert!(token.is_cancelled());
 
@@ -2306,7 +3120,7 @@ mod tests {
 
         // Now removal should succeed
         let remove_res2 = manager.remove_task(&id);
-        assert_eq!(remove_res2.unwrap(), true);
+        assert!(remove_res2.unwrap());
     }
 
     #[test]
@@ -2511,12 +3325,16 @@ mod tests {
     fn test_spawn_task_with_sink_captures_logs() {
         let manager = TaskManager::new();
         let (id, _token, logs) = manager
-            .spawn_task_with_sink("sink-test".into(), "capturing logs".into(), |_token, task_logs| {
-                task_logs.push("Log entry 1: initialized");
-                task_logs.push("Log entry 2: executing tool");
-                task_logs.push("Log entry 3: success");
-                Ok("done".into())
-            })
+            .spawn_task_with_sink(
+                "sink-test".into(),
+                "capturing logs".into(),
+                |_token, task_logs| {
+                    task_logs.push("Log entry 1: initialized");
+                    task_logs.push("Log entry 2: executing tool");
+                    task_logs.push("Log entry 3: success");
+                    Ok("done".into())
+                },
+            )
             .unwrap();
 
         manager.await_task(&id, None).unwrap();
@@ -2576,5 +3394,298 @@ mod tests {
         let drained = manager.drain_unnotified_terminal_tasks();
         assert_eq!(drained.len(), 1);
         assert_eq!(drained[0].id, id);
+    }
+
+    // =========================================================================
+    // SUITE 9: PERSISTENCE, DAG DEPENDENCIES, AND CRASH RECOVERY
+    // =========================================================================
+
+    struct TestTempDir {
+        path: std::path::PathBuf,
+    }
+
+    impl TestTempDir {
+        fn new(prefix: &str) -> Self {
+            let unique = format!(
+                "ctrl_task_test_{}_{}_{}",
+                prefix,
+                std::process::id(),
+                SystemTime::now()
+                    .duration_since(SystemTime::UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos()
+            );
+            let path = std::env::temp_dir().join(unique);
+            std::fs::create_dir_all(&path).expect("Failed to create test directory");
+            Self { path }
+        }
+        fn path(&self) -> &std::path::Path {
+            &self.path
+        }
+    }
+
+    impl Drop for TestTempDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.path);
+        }
+    }
+
+    #[test]
+    fn test_task_persistence_and_restore() {
+        let temp = TestTempDir::new("persistence_restore");
+        let manager = TaskManager::load_from_disk(temp.path()).unwrap();
+
+        let (id1, _, _) = manager
+            .spawn_task_with_sink("build-job".into(), "Compile crate".into(), |_token, logs| {
+                logs.push("cargo: building artifacts...");
+                logs.push("cargo: finished target");
+                Ok("Compilation complete".into())
+            })
+            .unwrap();
+
+        let snap1 = manager.await_task(&id1, None).unwrap();
+        assert_eq!(snap1.status, TaskStatus::Completed);
+
+        // Verify tasks.jsonl exists on disk
+        let tasks_file = temp.path().join(".ctrl").join("tasks.jsonl");
+        assert!(tasks_file.exists());
+        let content = std::fs::read_to_string(&tasks_file).unwrap();
+        assert!(content.contains(&id1));
+        assert!(content.contains("Compilation complete"));
+
+        // Verify disk log file exists
+        let log_file = temp.path().join(".ctrl").join("tasks").join(format!("{}.log", id1));
+        assert!(log_file.exists());
+        let log_content = std::fs::read_to_string(&log_file).unwrap();
+        assert!(log_content.contains("cargo: building artifacts..."));
+
+        // Simulate restarting process: load into a new manager
+        let restored_mgr = TaskManager::load_from_disk(temp.path()).unwrap();
+        let restored_snap = restored_mgr.get_task(&id1).expect("Task should be restored");
+        assert_eq!(restored_snap.id, id1);
+        assert_eq!(restored_snap.status, TaskStatus::Completed);
+        assert_eq!(restored_snap.result.as_deref(), Some("Compilation complete"));
+
+        // Verify log fallback from disk
+        let restored_logs = restored_mgr.get_task_logs(&id1).expect("Logs should be restored from disk");
+        assert_eq!(restored_logs.len(), 2);
+        assert_eq!(restored_logs[0], "cargo: building artifacts...");
+    }
+
+    #[test]
+    fn test_task_crash_recovery_reconciles_running_and_queued_to_failed() {
+        let temp = TestTempDir::new("crash_recovery");
+        let ctrl_dir = temp.path().join(".ctrl");
+        std::fs::create_dir_all(&ctrl_dir).unwrap();
+        let tasks_file = ctrl_dir.join("tasks.jsonl");
+
+        // Write snapshots simulating tasks interrupted by an abrupt crash
+        let t1 = TaskSnapshot {
+            id: "task-1".into(),
+            name: "finished-task".into(),
+            description: "already done".into(),
+            status: TaskStatus::Completed,
+            created_at: "2026-09-14T00:00:00Z".into(),
+            started_at: Some("2026-09-14T00:00:01Z".into()),
+            finished_at: Some("2026-09-14T00:00:05Z".into()),
+            elapsed_secs: 4.0,
+            elapsed_human: "4.0s".into(),
+            duration_ms: Some(4000),
+            result: Some("ok".into()),
+            error: None,
+            notified: true,
+            dependencies: vec![],
+        };
+        let t2 = TaskSnapshot {
+            id: "task-2".into(),
+            name: "crashed-running-task".into(),
+            description: "in flight when killed".into(),
+            status: TaskStatus::Running,
+            created_at: "2026-09-14T00:01:00Z".into(),
+            started_at: Some("2026-09-14T00:01:01Z".into()),
+            finished_at: None,
+            elapsed_secs: 10.0,
+            elapsed_human: "10.0s".into(),
+            duration_ms: None,
+            result: None,
+            error: None,
+            notified: false,
+            dependencies: vec![],
+        };
+        let t3 = TaskSnapshot {
+            id: "task-3".into(),
+            name: "orphaned-queued-task".into(),
+            description: "waiting when killed".into(),
+            status: TaskStatus::Queued,
+            created_at: "2026-09-14T00:02:00Z".into(),
+            started_at: None,
+            finished_at: None,
+            elapsed_secs: 0.0,
+            elapsed_human: "0ms".into(),
+            duration_ms: None,
+            result: None,
+            error: None,
+            notified: false,
+            dependencies: vec![],
+        };
+
+        use std::io::Write;
+        let mut file = std::fs::File::create(&tasks_file).unwrap();
+        writeln!(file, "{}", serde_json::to_string(&t1).unwrap()).unwrap();
+        writeln!(file, "{}", serde_json::to_string(&t2).unwrap()).unwrap();
+        writeln!(file, "{}", serde_json::to_string(&t3).unwrap()).unwrap();
+        drop(file);
+
+        // Load and reconcile
+        let manager = TaskManager::load_from_disk(temp.path()).unwrap();
+
+        // 1. Task 1 preserved
+        let r1 = manager.get_task("task-1").unwrap();
+        assert_eq!(r1.status, TaskStatus::Completed);
+
+        // 2. Task 2 reconciled Running -> Failed
+        let r2 = manager.get_task("task-2").unwrap();
+        assert_eq!(r2.status, TaskStatus::Failed);
+        assert!(r2.error.unwrap().contains("interrupted"));
+
+        // 3. Task 3 reconciled Queued -> Failed
+        let r3 = manager.get_task("task-3").unwrap();
+        assert_eq!(r3.status, TaskStatus::Failed);
+        assert!(r3.error.unwrap().contains("never started"));
+
+        // 4. Monotonic counter synchronization: max_id was 3, next task must be task-4
+        let (id4, _) = manager
+            .spawn_task("new-task".into(), "after restart".into(), |_| Ok("success".into()))
+            .unwrap();
+        assert_eq!(id4, "task-4");
+    }
+
+    #[test]
+    fn test_dag_dependency_execution_order() {
+        let manager = TaskManager::new();
+        let execution_order = Arc::new(Mutex::new(Vec::new()));
+
+        let exec1 = execution_order.clone();
+        let (id_a, _) = manager
+            .spawn_task("task-A".into(), "step 1".into(), move |_| {
+                thread::sleep(Duration::from_millis(30));
+                exec1.lock().unwrap().push("A");
+                Ok("result-A".into())
+            })
+            .unwrap();
+
+        let exec2 = execution_order.clone();
+        let (id_b, _) = manager
+            .spawn_task_with_dependencies(
+                "task-B".into(),
+                "step 2 (depends on A)".into(),
+                vec![id_a.clone()],
+                move |_| {
+                    exec2.lock().unwrap().push("B");
+                    Ok("result-B".into())
+                },
+            )
+            .unwrap();
+
+        let snap_b = manager.await_task(&id_b, None).unwrap();
+        assert_eq!(snap_b.status, TaskStatus::Completed);
+        assert_eq!(snap_b.result.as_deref(), Some("result-B"));
+
+        let snap_a = manager.get_task(&id_a).unwrap();
+        assert_eq!(snap_a.status, TaskStatus::Completed);
+
+        let order = execution_order.lock().unwrap().clone();
+        assert_eq!(order, vec!["A", "B"]);
+    }
+
+    #[test]
+    fn test_dag_cycle_and_missing_dependency_rejections() {
+        let manager = TaskManager::new();
+        let _id1 = manager
+            .spawn_task("t1".into(), "d1".into(), |_| Ok("ok".into()))
+            .unwrap();
+
+        // 1. Missing dependency
+        let err_missing = manager
+            .spawn_task_with_dependencies(
+                "t2".into(),
+                "d2".into(),
+                vec!["nonexistent-task".into()],
+                |_| Ok("ok".into()),
+            )
+            .unwrap_err();
+        assert!(matches!(err_missing, TaskError::MissingDependency { .. }));
+
+        // 2. Self cycle
+        let err_self = manager
+            .spawn_task_with_dependencies(
+                "t3".into(),
+                "d3".into(),
+                vec!["task-2".into()], // candidate task ID is task-2
+                |_| Ok("ok".into()),
+            );
+        assert!(err_self.is_err());
+    }
+
+    #[test]
+    fn test_dag_failure_and_cancellation_cascade() {
+        let manager = TaskManager::new();
+
+        // 1. Failure cascade: A fails -> B cascades to Failed without running
+        let (id_a, _) = manager
+            .spawn_task("task-fail".into(), "fails".into(), |_| {
+                Err(anyhow::anyhow!("prerequisite exploded"))
+            })
+            .unwrap();
+
+        let b_ran = Arc::new(AtomicBool::new(false));
+        let b_ran_clone = b_ran.clone();
+        let (id_b, _) = manager
+            .spawn_task_with_dependencies(
+                "task-cascade-fail".into(),
+                "should not run".into(),
+                vec![id_a.clone()],
+                move |_| {
+                    b_ran_clone.store(true, Ordering::SeqCst);
+                    Ok("ran".into())
+                },
+            )
+            .unwrap();
+
+        let snap_b = manager.await_task(&id_b, None).unwrap();
+        assert_eq!(snap_b.status, TaskStatus::Failed);
+        assert!(snap_b.error.unwrap().contains("failed"));
+        assert!(!b_ran.load(Ordering::SeqCst), "Task B must not have executed its runner");
+
+        // 2. Cancellation cascade: C cancelled -> D cascades to Cancelled without running
+        let (id_c, token_c) = manager
+            .spawn_task("task-cancel".into(), "will cancel".into(), |tok| {
+                while !tok.is_cancelled() {
+                    thread::sleep(Duration::from_millis(5));
+                }
+                Err(anyhow::anyhow!("cancelled"))
+            })
+            .unwrap();
+
+        let d_ran = Arc::new(AtomicBool::new(false));
+        let d_ran_clone = d_ran.clone();
+        let (id_d, _) = manager
+            .spawn_task_with_dependencies(
+                "task-cascade-cancel".into(),
+                "should not run".into(),
+                vec![id_c.clone()],
+                move |_| {
+                    d_ran_clone.store(true, Ordering::SeqCst);
+                    Ok("ran".into())
+                },
+            )
+            .unwrap();
+
+        token_c.cancel();
+        let _ = manager.await_task(&id_c, None);
+
+        let snap_d = manager.await_task(&id_d, None).unwrap();
+        assert_eq!(snap_d.status, TaskStatus::Cancelled);
+        assert!(!d_ran.load(Ordering::SeqCst), "Task D must not have executed its runner");
     }
 }

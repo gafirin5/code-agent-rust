@@ -97,15 +97,16 @@ impl CheckpointManager {
         let exists = path.exists();
 
         let snapshot_rel_path = if exists {
-            let file_name = path
-                .file_name()
-                .and_then(|n| n.to_str())
-                .unwrap_or("file");
+            let file_name = path.file_name().and_then(|n| n.to_str()).unwrap_or("file");
             let snap_name = format!("{}_{}", id, file_name);
             let snap_path = dir.join(&snap_name);
 
-            let content = fs::read(path)
-                .with_context(|| format!("Failed to read existing file for snapshot: {}", file_path_str))?;
+            let content = fs::read(path).with_context(|| {
+                format!(
+                    "Failed to read existing file for snapshot: {}",
+                    file_path_str
+                )
+            })?;
             fs::write(&snap_path, content)?;
             Some(snap_name)
         } else {
@@ -190,7 +191,11 @@ impl CheckpointManager {
         // Fallback to internal snapshot comparison
         let index = Self::load_index();
         let target_record = if let Some(filter) = file_filter {
-            index.records.iter().rev().find(|r| r.file_path.contains(filter))
+            index
+                .records
+                .iter()
+                .rev()
+                .find(|r| r.file_path.contains(filter))
         } else {
             index.records.last()
         };
@@ -210,14 +215,13 @@ impl CheckpointManager {
 
         let current_content = fs::read_to_string(&record.file_path).unwrap_or_default();
 
-        let diff_text = generate_unified_diff(
-            &record.file_path,
-            &old_content,
-            &current_content,
-        );
+        let diff_text = generate_unified_diff(&record.file_path, &old_content, &current_content);
 
         if diff_text.trim().is_empty() {
-            Ok(format!("No diff detected for '{}' compared to checkpoint #{}", record.file_path, record.id))
+            Ok(format!(
+                "No diff detected for '{}' compared to checkpoint #{}",
+                record.file_path, record.id
+            ))
         } else {
             Ok(format_color_diff(&diff_text))
         }
@@ -250,8 +254,16 @@ fn run_git_diff(file_filter: Option<&str>) -> Result<String> {
 }
 
 pub fn generate_unified_diff(filename: &str, old: &str, new: &str) -> String {
-    let old_lines: Vec<&str> = if old.is_empty() { Vec::new() } else { old.lines().collect() };
-    let new_lines: Vec<&str> = if new.is_empty() { Vec::new() } else { new.lines().collect() };
+    let old_lines: Vec<&str> = if old.is_empty() {
+        Vec::new()
+    } else {
+        old.lines().collect()
+    };
+    let new_lines: Vec<&str> = if new.is_empty() {
+        Vec::new()
+    } else {
+        new.lines().collect()
+    };
 
     if old_lines == new_lines {
         return String::new();
@@ -320,7 +332,8 @@ pub fn format_color_diff(raw_diff: &str) -> String {
             out.push_str(&format!("\x1B[31m{}\x1B[0m\n", line));
         } else if line.starts_with('@') {
             out.push_str(&format!("\x1B[36m{}\x1B[0m\n", line));
-        } else if line.starts_with("diff ") || line.starts_with("--- ") || line.starts_with("+++ ") {
+        } else if line.starts_with("diff ") || line.starts_with("--- ") || line.starts_with("+++ ")
+        {
             out.push_str(&format!("\x1B[1m{}\x1B[0m\n", line));
         } else {
             out.push_str(&format!("{}\n", line));

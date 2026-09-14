@@ -1,6 +1,6 @@
+use crate::tools::result_store::ResultStore;
 use anyhow::Result;
 use std::process::Command;
-use crate::tools::result_store::ResultStore;
 
 pub fn execute_shell(command_str: &str, _timeout_secs: Option<u64>) -> Result<String> {
     #[cfg(target_os = "windows")]
@@ -23,7 +23,10 @@ pub fn execute_shell(command_str: &str, _timeout_secs: Option<u64>) -> Result<St
     let stderr = String::from_utf8_lossy(&output.stderr);
     let exit_code = output.status.code().unwrap_or(-1);
 
-    let mut combined = format!("--- Command: '{}' (Exit Code: {}) ---\n", command_str, exit_code);
+    let mut combined = format!(
+        "--- Command: '{}' (Exit Code: {}) ---\n",
+        command_str, exit_code
+    );
     if !stdout.is_empty() {
         combined.push_str("\n[STDOUT]\n");
         combined.push_str(&stdout);

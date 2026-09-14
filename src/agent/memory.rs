@@ -1,7 +1,7 @@
+use crate::types::ChatMessage;
 use anyhow::Result;
 use std::fs;
 use std::path::PathBuf;
-use crate::types::ChatMessage;
 
 pub struct MemoryManager;
 
@@ -16,7 +16,9 @@ impl MemoryManager {
     pub fn load_long_term_memory() -> Option<String> {
         let path = Self::get_ctrl_dir().join("MEMORY.md");
         if path.exists() {
-            fs::read_to_string(&path).ok().filter(|s| !s.trim().is_empty())
+            fs::read_to_string(&path)
+                .ok()
+                .filter(|s| !s.trim().is_empty())
         } else {
             None
         }
@@ -37,17 +39,24 @@ impl MemoryManager {
                     format!("{}\n- {}\n", existing.trim_end(), content.trim())
                 };
                 fs::write(&path, updated.as_bytes())?;
-                Ok(format!("Appended note to workspace memory ({})", path.display()))
+                Ok(format!(
+                    "Appended note to workspace memory ({})",
+                    path.display()
+                ))
             }
             "set" | "write" => {
                 fs::write(&path, content.as_bytes())?;
                 Ok(format!("Updated workspace memory ({})", path.display()))
             }
             "read" => {
-                let existing = fs::read_to_string(&path).unwrap_or_else(|_| "(No workspace memory recorded yet)".to_string());
+                let existing = fs::read_to_string(&path)
+                    .unwrap_or_else(|_| "(No workspace memory recorded yet)".to_string());
                 Ok(existing)
             }
-            _ => anyhow::bail!("Unknown memory action: '{}'. Use 'read', 'append', or 'set'.", action),
+            _ => anyhow::bail!(
+                "Unknown memory action: '{}'. Use 'read', 'append', or 'set'.",
+                action
+            ),
         }
     }
 

@@ -1,14 +1,14 @@
-use anyhow::{Context, Result};
-use serde_json::json;
-use std::io::{BufRead, BufReader, Write};
 use crate::agent::permissions::PermissionGate;
 use crate::agent::provider::ApiProtocol;
-use crate::agent::tasks::{CancellationToken, OutputSink};
+use crate::agent::tasks::{AgentUiEvent, CancellationToken, OutputSink};
 use crate::tools::{dispatch_tool, get_available_tools};
 use crate::types::{
     ChatCompletionStreamChunk, ChatCompletionTool, ChatMessage, ChatResponse, FunctionCall,
     MessageRole, ToolCall, Usage,
 };
+use anyhow::{Context, Result};
+use serde_json::json;
+use std::io::{BufRead, BufReader, Write};
 
 #[derive(Debug, Clone)]
 pub struct AgentTurnResult {
@@ -87,8 +87,9 @@ pub fn build_anthropic_messages(conversation: &[ChatMessage]) -> Vec<serde_json:
                 }
                 if let Some(tcs) = &msg.tool_calls {
                     for tc in tcs {
-                        let parsed_input: serde_json::Value = serde_json::from_str(&tc.function.arguments)
-                            .unwrap_or_else(|_| json!({}));
+                        let parsed_input: serde_json::Value =
+                            serde_json::from_str(&tc.function.arguments)
+                                .unwrap_or_else(|_| json!({}));
                         content_blocks.push(json!({
                             "type": "tool_use",
                             "id": tc.id,
@@ -160,6 +161,7 @@ pub fn build_anthropic_tools(tools_schema: &[ChatCompletionTool]) -> Vec<serde_j
         .collect()
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn run_agent_loop(
     prompt: &str,
     conversation: &mut Vec<ChatMessage>,
@@ -191,8 +193,11 @@ pub fn run_agent_loop(
     let default_sink = OutputSink::Terminal;
     let sink = output_sink.unwrap_or(&default_sink);
 
-    // If output is silent/buffered, force streaming to false to prevent raw chunk leakage to stdout
-    let effective_stream = if sink.is_silent() { false } else { stream };
+    // Buffered background sinks do not stream; terminal and TUI channel sinks do
+    let effective_stream = match sink {
+        OutputSink::Buffered(_) => false,
+        OutputSink::Terminal | OutputSink::Channel(_) => stream,
+    };
 
     let tools_schema = get_available_tools();
     let effective_ctx_limit = context_window_limit.unwrap_or(128_000);
@@ -207,7 +212,9 @@ pub fn run_agent_loop(
     loop {
         // Cooperative cancellation check before starting turn
         if let Some(token) = cancel_token {
-            token.check().map_err(|e| anyhow::anyhow!("Task cancelled: {}", e))?;
+            token
+                .check()
+                .map_err(|e| anyhow::anyhow!("Task cancelled: {}", e))?;
         }
 
         turn_count += 1;
@@ -248,6 +255,7 @@ pub fn run_agent_loop(
                     &mut accumulated_completion_tokens,
                     &mut accumulated_total_tokens,
                     sink,
+                    cancel_token,
                 )?
             }
             ApiProtocol::Anthropic => {
@@ -271,6 +279,39 @@ pub fn run_agent_loop(
                     &mut accumulated_completion_tokens,
                     &mut accumulated_total_tokens,
                     sink,
+                    cancel_token,
+                )?
+            }
+            ApiProtocol::Gemini => {
+                execute_gemini_turn(
+                    base_url,
+                    model,
+                    api_key,
+                    system_prompt,
+                    conversation,
+                    &tools_schema,
+                    effective_stream,
+                    &mut accumulated_prompt_tokens,
+                    &mut accumulated_completion_tokens,
+                    &mut accumulated_total_tokens,
+                    sink,
+                    cancel_token,
+                )?
+            }
+            ApiProtocol::Ollama => {
+                execute_ollama_turn(
+                    base_url,
+                    model,
+                    api_key,
+                    system_prompt,
+                    conversation,
+                    &tools_schema,
+                    effective_stream,
+                    &mut accumulated_prompt_tokens,
+                    &mut accumulated_completion_tokens,
+                    &mut accumulated_total_tokens,
+                    sink,
+                    cancel_token,
                 )?
             }
         };
@@ -280,7 +321,9 @@ pub fn run_agent_loop(
                 for call in &tool_calls {
                     // Check cancellation before each tool call
                     if let Some(token) = cancel_token {
-                        token.check().map_err(|e| anyhow::anyhow!("Task cancelled: {}", e))?;
+                        token
+                            .check()
+                            .map_err(|e| anyhow::anyhow!("Task cancelled: {}", e))?;
                     }
 
                     let name = &call.function.name;
@@ -292,11 +335,21 @@ pub fn run_agent_loop(
                     } else if arg_summary.is_empty() {
                         println!("  \x1B[36m⚡ Tool:\x1B[0m \x1B[1;37m{}\x1B[0m", name);
                     } else {
-                        println!("  \x1B[36m⚡ Tool:\x1B[0m \x1B[1;37m{}\x1B[0m \x1B[90m{}\x1B[0m", name, arg_summary);
+                        println!(
+                            "  \x1B[36m⚡ Tool:\x1B[0m \x1B[1;37m{}\x1B[0m \x1B[90m{}\x1B[0m",
+                            name, arg_summary
+                        );
                     }
+                    sink.send_event(AgentUiEvent::ToolStarted {
+                        name: name.clone(),
+                        args: args.clone(),
+                    });
 
-                    // Defense-in-depth: if running in silent background mode, reject interactive prompts
-                    let authorized = if sink.is_silent() && permission_gate.mode == crate::agent::permissions::PermissionMode::Ask {
+                    // Defense-in-depth: if running in silent background mode (and not TUI channel), reject interactive prompts
+                    let authorized = if !sink.is_channel()
+                        && sink.is_silent()
+                        && permission_gate.mode == crate::agent::permissions::PermissionMode::Ask
+                    {
                         sink.emit(&format!("  └─ ⚠ Mutating tool '{}' rejected (interactive permission prompt disabled in background mode)", name));
                         false
                     } else {
@@ -309,12 +362,23 @@ pub fn run_agent_loop(
                         } else {
                             println!("  \x1B[33m└─ ⚠\x1B[0m \x1B[33mAction rejected by user permission policy.\x1B[0m\n");
                         }
+                        sink.send_event(AgentUiEvent::ToolFinished {
+                            name: name.clone(),
+                            result: "Action rejected by user permission policy.".to_string(),
+                            success: false,
+                        });
                         "Action was rejected by user permission policy.".to_string()
-                    } else if name == "ask_user_question" && sink.is_silent() {
+                    } else if name == "ask_user_question" && !sink.is_channel() && sink.is_silent()
+                    {
                         // INTERACTIVE TOOL GUARD:
                         // Prevent background subagents from hijacking terminal stdin.
                         let err_msg = "Interactive tool 'ask_user_question' is disabled in background subagent mode. Proceed autonomously without interactive clarification.";
                         sink.emit(&format!("  └─ ✖ Error: {}", err_msg));
+                        sink.send_event(AgentUiEvent::ToolFinished {
+                            name: name.clone(),
+                            result: format!("Error: {}", err_msg),
+                            success: false,
+                        });
                         format!("Error: {}", err_msg)
                     } else {
                         match dispatch_tool(name, args) {
@@ -324,8 +388,16 @@ pub fn run_agent_loop(
                                 if sink.is_silent() {
                                     sink.emit(&format!("  └─ ✔ {}", first_line));
                                 } else {
-                                    println!("  \x1B[32m└─ ✔\x1B[0m \x1B[37m{}\x1B[0m\n", first_line);
+                                    println!(
+                                        "  \x1B[32m└─ ✔\x1B[0m \x1B[37m{}\x1B[0m\n",
+                                        first_line
+                                    );
                                 }
+                                sink.send_event(AgentUiEvent::ToolFinished {
+                                    name: name.clone(),
+                                    result: first_line.to_string(),
+                                    success: true,
+                                });
                                 res
                             }
                             Err(e) => {
@@ -334,6 +406,11 @@ pub fn run_agent_loop(
                                 } else {
                                     println!("  \x1B[31m└─ ✖ Error:\x1B[0m \x1B[31m{}\x1B[0m\n", e);
                                 }
+                                sink.send_event(AgentUiEvent::ToolFinished {
+                                    name: name.clone(),
+                                    result: format!("Error: {}", e),
+                                    success: false,
+                                });
                                 format!("Tool execution failed: {}", e)
                             }
                         }
@@ -349,6 +426,11 @@ pub fn run_agent_loop(
             }
         }
 
+        sink.send_event(AgentUiEvent::TurnCompleted {
+            tools_executed: total_tools_executed,
+            final_content: final_text.clone(),
+        });
+
         return Ok(AgentTurnResult {
             final_content: final_text,
             total_usage: Usage {
@@ -361,6 +443,7 @@ pub fn run_agent_loop(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn execute_openai_turn(
     endpoint: &str,
     model: &str,
@@ -372,6 +455,7 @@ fn execute_openai_turn(
     accumulated_completion: &mut u64,
     accumulated_total: &mut u64,
     sink: &OutputSink,
+    cancel_token: Option<&CancellationToken>,
 ) -> Result<(String, Option<Vec<ToolCall>>)> {
     if stream {
         let body = json!({
@@ -402,7 +486,11 @@ fn execute_openai_turn(
             Err(ureq::Error::Status(code, resp)) => {
                 sink.clear_spinner();
                 let err_body = resp.into_string().unwrap_or_default();
-                anyhow::bail!("OpenAI-Compatible Provider returned HTTP {}: {}", code, err_body);
+                anyhow::bail!(
+                    "OpenAI-Compatible Provider returned HTTP {}: {}",
+                    code,
+                    err_body
+                );
             }
             Err(e) => {
                 sink.clear_spinner();
@@ -419,6 +507,13 @@ fn execute_openai_turn(
         let mut tool_indicator_shown = false;
 
         for line_res in reader.lines() {
+            if let Some(token) = cancel_token {
+                if token.is_cancelled() {
+                    sink.emit_spinner("");
+                    sink.clear_spinner();
+                    anyhow::bail!("Streaming interrupted: Operation cancelled by user");
+                }
+            }
             let line = match line_res {
                 Ok(l) => l,
                 Err(_) => break,
@@ -447,7 +542,11 @@ fn execute_openai_turn(
                         if let Some(delta) = &ch.delta {
                             if let Some(reasoning) = &delta.reasoning_content {
                                 if !reasoning.is_empty() {
-                                    if !sink.is_silent() {
+                                    if sink.is_channel() {
+                                        sink.send_event(AgentUiEvent::ReasoningChunk(
+                                            reasoning.clone(),
+                                        ));
+                                    } else if !sink.is_silent() {
                                         if first_reasoning {
                                             print!("\x1B[90m┌─ 💭 Reasoning\n│ ");
                                             first_reasoning = false;
@@ -460,7 +559,11 @@ fn execute_openai_turn(
                             }
                             if let Some(content) = &delta.content {
                                 if !content.is_empty() {
-                                    if !sink.is_silent() {
+                                    if sink.is_channel() {
+                                        sink.send_event(AgentUiEvent::ContentChunk(
+                                            content.clone(),
+                                        ));
+                                    } else if !sink.is_silent() {
                                         if !accumulated_reasoning.is_empty() && first_content {
                                             println!("\n└────────────────────────────────────────────────\x1B[0m\n");
                                         }
@@ -495,18 +598,25 @@ fn execute_openai_turn(
                                     if let Some(f) = &td.function {
                                         if let Some(name) = &f.name {
                                             if !name.is_empty() && !tool_indicator_shown {
-                                                if !sink.is_silent() {
-                                                    if !accumulated_reasoning.is_empty() && first_content {
-                                                        println!("\n└────────────────────────────────────────────────\x1B[0m\n");
-                                                        first_content = false;
-                                                    }
+                                                if !sink.is_silent()
+                                                    && !accumulated_reasoning.is_empty()
+                                                    && first_content
+                                                {
+                                                    println!("\n└────────────────────────────────────────────────\x1B[0m\n");
+                                                    first_content = false;
                                                 }
                                                 tool_indicator_shown = true;
                                             }
-                                            accumulated_tool_calls[idx].function.name.push_str(name);
+                                            accumulated_tool_calls[idx]
+                                                .function
+                                                .name
+                                                .push_str(name);
                                         }
                                         if let Some(args) = &f.arguments {
-                                            accumulated_tool_calls[idx].function.arguments.push_str(args);
+                                            accumulated_tool_calls[idx]
+                                                .function
+                                                .arguments
+                                                .push_str(args);
                                         }
                                     }
                                 }
@@ -533,11 +643,19 @@ fn execute_openai_turn(
         if !accumulated_tool_calls.is_empty() {
             let assistant_msg = ChatMessage {
                 role: MessageRole::Assistant,
-                content: if accumulated_content.is_empty() { None } else { Some(accumulated_content) },
+                content: if accumulated_content.is_empty() {
+                    None
+                } else {
+                    Some(accumulated_content)
+                },
                 tool_calls: Some(accumulated_tool_calls.clone()),
                 tool_call_id: None,
                 name: None,
-                reasoning_content: if accumulated_reasoning.is_empty() { None } else { Some(accumulated_reasoning) },
+                reasoning_content: if accumulated_reasoning.is_empty() {
+                    None
+                } else {
+                    Some(accumulated_reasoning)
+                },
             };
             conversation.push(assistant_msg);
             return Ok((String::new(), Some(accumulated_tool_calls)));
@@ -557,7 +675,11 @@ fn execute_openai_turn(
             tool_calls: None,
             tool_call_id: None,
             name: None,
-            reasoning_content: if accumulated_reasoning.is_empty() { None } else { Some(accumulated_reasoning) },
+            reasoning_content: if accumulated_reasoning.is_empty() {
+                None
+            } else {
+                Some(accumulated_reasoning)
+            },
         };
         conversation.push(assistant_msg);
 
@@ -596,14 +718,19 @@ fn execute_openai_turn(
             }
         };
 
-        let raw_text = res.into_string().context("Failed to read response body from AI provider")?;
+        let raw_text = res
+            .into_string()
+            .context("Failed to read response body from AI provider")?;
         let clean_json = extract_json_slice(&raw_text);
 
-        let chat_res: ChatResponse = serde_json::from_str(clean_json)
-            .with_context(|| format!("Failed to parse AI provider JSON response: {}", clean_json))?;
+        let chat_res: ChatResponse = serde_json::from_str(clean_json).with_context(|| {
+            format!("Failed to parse AI provider JSON response: {}", clean_json)
+        })?;
 
         if let Some(err) = chat_res.error {
-            let msg = err.message.unwrap_or_else(|| "Unknown API error".to_string());
+            let msg = err
+                .message
+                .unwrap_or_else(|| "Unknown API error".to_string());
             anyhow::bail!("AI Provider error: {}", msg);
         }
 
@@ -664,10 +791,15 @@ fn execute_openai_turn(
             .unwrap_or_else(|| "(No response content)".to_string());
 
         conversation.push(msg.clone());
-        Ok((final_text.trim().to_string(), None))
+        let res_text = final_text.trim().to_string();
+        if sink.is_channel() {
+            sink.send_event(AgentUiEvent::ContentChunk(res_text.clone()));
+        }
+        Ok((res_text, None))
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn execute_anthropic_turn(
     endpoint: &str,
     model: &str,
@@ -680,6 +812,7 @@ fn execute_anthropic_turn(
     accumulated_completion: &mut u64,
     accumulated_total: &mut u64,
     sink: &OutputSink,
+    cancel_token: Option<&CancellationToken>,
 ) -> Result<(String, Option<Vec<ToolCall>>)> {
     let anthropic_msgs = build_anthropic_messages(conversation);
     let anthropic_tools = build_anthropic_tools(tools_schema);
@@ -729,6 +862,13 @@ fn execute_anthropic_turn(
         let mut tool_indicator_shown = false;
 
         for line_res in reader.lines() {
+            if let Some(token) = cancel_token {
+                if token.is_cancelled() {
+                    sink.emit_spinner("");
+                    sink.clear_spinner();
+                    anyhow::bail!("Streaming interrupted: Operation cancelled by user");
+                }
+            }
             let line = match line_res {
                 Ok(l) => l,
                 Err(_) => break,
@@ -748,7 +888,8 @@ fn execute_anthropic_turn(
                 match event_type {
                     "message_start" => {
                         if let Some(usage) = val.get("message").and_then(|m| m.get("usage")) {
-                            if let Some(in_tok) = usage.get("input_tokens").and_then(|n| n.as_u64()) {
+                            if let Some(in_tok) = usage.get("input_tokens").and_then(|n| n.as_u64())
+                            {
                                 *accumulated_prompt += in_tok;
                             }
                         }
@@ -758,8 +899,16 @@ fn execute_anthropic_turn(
                         if let Some(block) = val.get("content_block") {
                             let b_type = block.get("type").and_then(|t| t.as_str()).unwrap_or("");
                             if b_type == "tool_use" {
-                                let id = block.get("id").and_then(|s| s.as_str()).unwrap_or("").to_string();
-                                let name = block.get("name").and_then(|s| s.as_str()).unwrap_or("").to_string();
+                                let id = block
+                                    .get("id")
+                                    .and_then(|s| s.as_str())
+                                    .unwrap_or("")
+                                    .to_string();
+                                let name = block
+                                    .get("name")
+                                    .and_then(|s| s.as_str())
+                                    .unwrap_or("")
+                                    .to_string();
                                 while accumulated_tool_calls.len() <= idx {
                                     accumulated_tool_calls.push(ToolCall {
                                         id: String::new(),
@@ -775,7 +924,7 @@ fn execute_anthropic_turn(
 
                                 if !tool_indicator_shown {
                                     if !sink.is_silent() {
-                                        print!("\x1B[33m⚡ Streaming Tool Call...\x1B[0m\n");
+                                        println!("\x1B[33m⚡ Streaming Tool Call...\x1B[0m");
                                         let _ = std::io::stdout().flush();
                                     }
                                     tool_indicator_shown = true;
@@ -789,7 +938,11 @@ fn execute_anthropic_turn(
                             let d_type = delta.get("type").and_then(|t| t.as_str()).unwrap_or("");
                             if d_type == "text_delta" {
                                 if let Some(txt) = delta.get("text").and_then(|s| s.as_str()) {
-                                    if !sink.is_silent() {
+                                    if sink.is_channel() {
+                                        sink.send_event(AgentUiEvent::ContentChunk(
+                                            txt.to_string(),
+                                        ));
+                                    } else if !sink.is_silent() {
                                         if first_content {
                                             first_content = false;
                                         }
@@ -801,7 +954,8 @@ fn execute_anthropic_turn(
                                     accumulated_content.push_str(txt);
                                 }
                             } else if d_type == "input_json_delta" {
-                                if let Some(pj) = delta.get("partial_json").and_then(|s| s.as_str()) {
+                                if let Some(pj) = delta.get("partial_json").and_then(|s| s.as_str())
+                                {
                                     while accumulated_tool_calls.len() <= idx {
                                         accumulated_tool_calls.push(ToolCall {
                                             id: String::new(),
@@ -819,7 +973,9 @@ fn execute_anthropic_turn(
                     }
                     "message_delta" => {
                         if let Some(usage) = val.get("usage") {
-                            if let Some(out_tok) = usage.get("output_tokens").and_then(|n| n.as_u64()) {
+                            if let Some(out_tok) =
+                                usage.get("output_tokens").and_then(|n| n.as_u64())
+                            {
                                 *accumulated_completion += out_tok;
                             }
                         }
@@ -851,7 +1007,11 @@ fn execute_anthropic_turn(
         if !accumulated_tool_calls.is_empty() {
             let assistant_msg = ChatMessage {
                 role: MessageRole::Assistant,
-                content: if accumulated_content.is_empty() { None } else { Some(accumulated_content) },
+                content: if accumulated_content.is_empty() {
+                    None
+                } else {
+                    Some(accumulated_content)
+                },
                 tool_calls: Some(accumulated_tool_calls.clone()),
                 tool_call_id: None,
                 name: None,
@@ -879,13 +1039,18 @@ fn execute_anthropic_turn(
 
         Ok((final_text, None))
     } else {
-        let raw_text = res.into_string().context("Failed to read Anthropic response body")?;
+        let raw_text = res
+            .into_string()
+            .context("Failed to read Anthropic response body")?;
         let clean_json = extract_json_slice(&raw_text);
         let val: serde_json::Value = serde_json::from_str(clean_json)
             .with_context(|| format!("Failed to parse Anthropic JSON: {}", clean_json))?;
 
         if let Some(err) = val.get("error") {
-            let msg = err.get("message").and_then(|m| m.as_str()).unwrap_or("Anthropic API error");
+            let msg = err
+                .get("message")
+                .and_then(|m| m.as_str())
+                .unwrap_or("Anthropic API error");
             anyhow::bail!("Anthropic error: {}", msg);
         }
 
@@ -910,8 +1075,16 @@ fn execute_anthropic_turn(
                         text_acc.push_str(txt);
                     }
                 } else if b_type == "tool_use" {
-                    let id = block.get("id").and_then(|s| s.as_str()).unwrap_or("").to_string();
-                    let name = block.get("name").and_then(|s| s.as_str()).unwrap_or("").to_string();
+                    let id = block
+                        .get("id")
+                        .and_then(|s| s.as_str())
+                        .unwrap_or("")
+                        .to_string();
+                    let name = block
+                        .get("name")
+                        .and_then(|s| s.as_str())
+                        .unwrap_or("")
+                        .to_string();
                     let input_val = block.get("input").cloned().unwrap_or_else(|| json!({}));
                     tool_calls.push(ToolCall {
                         id,
@@ -921,6 +1094,387 @@ fn execute_anthropic_turn(
                             arguments: serde_json::to_string(&input_val).unwrap_or_default(),
                         },
                     });
+                }
+            }
+        }
+
+        if !tool_calls.is_empty() {
+            let assistant_msg = ChatMessage {
+                role: MessageRole::Assistant,
+                content: if text_acc.is_empty() {
+                    None
+                } else {
+                    Some(text_acc)
+                },
+                tool_calls: Some(tool_calls.clone()),
+                tool_call_id: None,
+                name: None,
+                reasoning_content: None,
+            };
+            conversation.push(assistant_msg);
+            return Ok((String::new(), Some(tool_calls)));
+        }
+
+        let final_text = if !text_acc.trim().is_empty() {
+            text_acc.trim().to_string()
+        } else {
+            "(No response content)".to_string()
+        };
+
+        let assistant_msg = ChatMessage {
+            role: MessageRole::Assistant,
+            content: Some(final_text.clone()),
+            tool_calls: None,
+            tool_call_id: None,
+            name: None,
+            reasoning_content: None,
+        };
+        conversation.push(assistant_msg);
+        if sink.is_channel() {
+            sink.send_event(AgentUiEvent::ContentChunk(final_text.clone()));
+        }
+
+        Ok((final_text, None))
+    }
+}
+
+/// Formats standard ChatMessage conversation turns into Gemini contents format.
+pub fn build_gemini_contents(conversation: &[ChatMessage]) -> Vec<serde_json::Value> {
+    let mut contents = Vec::new();
+    for msg in conversation {
+        match msg.role {
+            MessageRole::System => continue,
+            MessageRole::User => {
+                let text = msg.content.clone().unwrap_or_default();
+                contents.push(json!({
+                    "role": "user",
+                    "parts": [{ "text": text }]
+                }));
+            }
+            MessageRole::Assistant => {
+                let mut parts = Vec::new();
+                if let Some(c) = &msg.content {
+                    if !c.trim().is_empty() {
+                        parts.push(json!({ "text": c }));
+                    }
+                }
+                if let Some(tcs) = &msg.tool_calls {
+                    for tc in tcs {
+                        let parsed_args: serde_json::Value =
+                            serde_json::from_str(&tc.function.arguments)
+                                .unwrap_or_else(|_| json!({}));
+                        parts.push(json!({
+                            "functionCall": {
+                                "name": tc.function.name,
+                                "args": parsed_args
+                            }
+                        }));
+                    }
+                }
+                if parts.is_empty() {
+                    parts.push(json!({ "text": "" }));
+                }
+                contents.push(json!({
+                    "role": "model",
+                    "parts": parts
+                }));
+            }
+            MessageRole::Tool => {
+                let tool_name = msg.name.clone().unwrap_or_else(|| "unknown_tool".to_string());
+                let result_content = msg.content.clone().unwrap_or_default();
+                contents.push(json!({
+                    "role": "function",
+                    "parts": [{
+                        "functionResponse": {
+                            "name": tool_name,
+                            "response": {
+                                "content": result_content
+                            }
+                        }
+                    }]
+                }));
+            }
+        }
+    }
+    contents
+}
+
+/// Converts internal tool definitions to Gemini's functionDeclarations format.
+pub fn build_gemini_tools(tools_schema: &[ChatCompletionTool]) -> Option<serde_json::Value> {
+    if tools_schema.is_empty() {
+        return None;
+    }
+    let declarations: Vec<serde_json::Value> = tools_schema
+        .iter()
+        .map(|t| {
+            json!({
+                "name": t.function.name,
+                "description": t.function.description,
+                "parameters": t.function.parameters
+            })
+        })
+        .collect();
+    Some(json!([{
+        "functionDeclarations": declarations
+    }]))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn execute_gemini_turn(
+    base_url: &str,
+    model: &str,
+    api_key: &str,
+    system_prompt: &str,
+    conversation: &mut Vec<ChatMessage>,
+    tools_schema: &[ChatCompletionTool],
+    stream: bool,
+    accumulated_prompt: &mut u64,
+    accumulated_completion: &mut u64,
+    accumulated_total: &mut u64,
+    sink: &OutputSink,
+    cancel_token: Option<&CancellationToken>,
+) -> Result<(String, Option<Vec<ToolCall>>)> {
+    let clean_model = model.strip_prefix("models/").unwrap_or(model);
+    let base = base_url.trim_end_matches('/');
+    let base = if base.contains("/v1beta") {
+        base.to_string()
+    } else {
+        format!("{}/v1beta", base)
+    };
+
+    let endpoint = if stream {
+        format!("{}/models/{}:streamGenerateContent?alt=sse", base, clean_model)
+    } else {
+        format!("{}/models/{}:generateContent", base, clean_model)
+    };
+
+    let gemini_contents = build_gemini_contents(conversation);
+    let (_, cat_out, _) = crate::agent::probe::resolve_model_limits(clean_model);
+    let effective_max_tokens = cat_out.unwrap_or(8192);
+
+    let mut body = json!({
+        "contents": gemini_contents,
+        "generationConfig": {
+            "temperature": 0.2,
+            "maxOutputTokens": effective_max_tokens
+        }
+    });
+
+    if !system_prompt.trim().is_empty() {
+        body["systemInstruction"] = json!({
+            "parts": [{ "text": system_prompt }]
+        });
+    }
+
+    if let Some(tools_val) = build_gemini_tools(tools_schema) {
+        body["tools"] = tools_val;
+    }
+
+    sink.emit_spinner("\r\x1B[36m✦\x1B[0m \x1B[90mThinking...\x1B[0m");
+
+    let mut request = ureq::post(&endpoint)
+        .set("Content-Type", "application/json")
+        .timeout(std::time::Duration::from_secs(120));
+
+    if !api_key.is_empty() && api_key != "none" {
+        request = request.set("x-goog-api-key", api_key);
+    }
+
+    let response = request.send_json(body);
+    let res = match response {
+        Ok(r) => {
+            sink.clear_spinner();
+            r
+        }
+        Err(ureq::Error::Status(code, resp)) => {
+            sink.clear_spinner();
+            let err_body = resp.into_string().unwrap_or_default();
+            anyhow::bail!("Google Gemini API returned HTTP {}: {}", code, err_body);
+        }
+        Err(e) => {
+            sink.clear_spinner();
+            anyhow::bail!("Gemini request error: {}", e);
+        }
+    };
+
+    if stream {
+        let reader = BufReader::new(res.into_reader());
+        let mut accumulated_content = String::new();
+        let mut accumulated_tool_calls: Vec<ToolCall> = Vec::new();
+        let mut first_content = true;
+
+        for line_res in reader.lines() {
+            if let Some(token) = cancel_token {
+                if token.is_cancelled() {
+                    sink.emit_spinner("");
+                    sink.clear_spinner();
+                    anyhow::bail!("Streaming interrupted: Operation cancelled by user");
+                }
+            }
+            let line = match line_res {
+                Ok(l) => l,
+                Err(_) => break,
+            };
+            let trimmed = line.trim();
+            if trimmed.is_empty() || trimmed.starts_with(':') {
+                continue;
+            }
+            let data_str = if let Some(rest) = trimmed.strip_prefix("data:") {
+                rest.trim_start()
+            } else {
+                continue;
+            };
+
+            if data_str == "[DONE]" {
+                break;
+            }
+
+            if let Ok(val) = serde_json::from_str::<serde_json::Value>(data_str) {
+                if let Some(usage) = val.get("usageMetadata") {
+                    if let Some(in_tok) = usage.get("promptTokenCount").and_then(|n| n.as_u64()) {
+                        *accumulated_prompt += in_tok;
+                    }
+                    if let Some(out_tok) = usage.get("candidatesTokenCount").and_then(|n| n.as_u64()) {
+                        *accumulated_completion += out_tok;
+                    }
+                }
+
+                if let Some(candidates) = val.get("candidates").and_then(|c| c.as_array()) {
+                    for cand in candidates {
+                        if let Some(content) = cand.get("content") {
+                            if let Some(parts) = content.get("parts").and_then(|p| p.as_array()) {
+                                for part in parts {
+                                    if let Some(txt) = part.get("text").and_then(|t| t.as_str()) {
+                                        if !txt.is_empty() {
+                                            if sink.is_channel() {
+                                                sink.send_event(AgentUiEvent::ContentChunk(txt.to_string()));
+                                            } else if !sink.is_silent() {
+                                                if first_content {
+                                                    print!("\r\x1B[K");
+                                                    first_content = false;
+                                                }
+                                                print!("{}", txt);
+                                                let _ = std::io::stdout().flush();
+                                            }
+                                            accumulated_content.push_str(txt);
+                                        }
+                                    }
+                                    if let Some(fc) = part.get("functionCall") {
+                                        if let Some(name) = fc.get("name").and_then(|n| n.as_str()) {
+                                            if !sink.is_silent() && !sink.is_channel() && first_content {
+                                                print!("\r\x1B[K");
+                                            }
+                                            let args_val = fc.get("args").cloned().unwrap_or_else(|| json!({}));
+                                            let args_str = serde_json::to_string(&args_val).unwrap_or_default();
+                                            let call_id = format!("call_gemini_{}_{}", accumulated_tool_calls.len(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis());
+                                            accumulated_tool_calls.push(ToolCall {
+                                                id: call_id,
+                                                call_type: "function".to_string(),
+                                                function: FunctionCall {
+                                                    name: name.to_string(),
+                                                    arguments: args_str,
+                                                },
+                                            });
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        if !first_content && !sink.is_silent() && !sink.is_channel() {
+            println!();
+        }
+
+        *accumulated_total = *accumulated_prompt + *accumulated_completion;
+        accumulated_tool_calls.retain(|tc| !tc.function.name.trim().is_empty());
+
+        if !accumulated_tool_calls.is_empty() {
+            let assistant_msg = ChatMessage {
+                role: MessageRole::Assistant,
+                content: if accumulated_content.is_empty() {
+                    None
+                } else {
+                    Some(accumulated_content)
+                },
+                tool_calls: Some(accumulated_tool_calls.clone()),
+                tool_call_id: None,
+                name: None,
+                reasoning_content: None,
+            };
+            conversation.push(assistant_msg);
+            return Ok((String::new(), Some(accumulated_tool_calls)));
+        }
+
+        let final_text = if !accumulated_content.trim().is_empty() {
+            accumulated_content.trim().to_string()
+        } else {
+            "(No response content)".to_string()
+        };
+
+        let assistant_msg = ChatMessage {
+            role: MessageRole::Assistant,
+            content: Some(final_text.clone()),
+            tool_calls: None,
+            tool_call_id: None,
+            name: None,
+            reasoning_content: None,
+        };
+        conversation.push(assistant_msg);
+
+        Ok((final_text, None))
+    } else {
+        let raw_text = res.into_string().context("Failed to read Gemini response body")?;
+        let clean_json = extract_json_slice(&raw_text);
+        let val: serde_json::Value = serde_json::from_str(clean_json)
+            .with_context(|| format!("Failed to parse Gemini JSON: {}", clean_json))?;
+
+        if let Some(err) = val.get("error") {
+            let msg = err.get("message").and_then(|m| m.as_str()).unwrap_or("Gemini API error");
+            anyhow::bail!("Gemini error: {}", msg);
+        }
+
+        if let Some(usage) = val.get("usageMetadata") {
+            if let Some(in_tok) = usage.get("promptTokenCount").and_then(|n| n.as_u64()) {
+                *accumulated_prompt += in_tok;
+            }
+            if let Some(out_tok) = usage.get("candidatesTokenCount").and_then(|n| n.as_u64()) {
+                *accumulated_completion += out_tok;
+            }
+            *accumulated_total = *accumulated_prompt + *accumulated_completion;
+        }
+
+        let mut text_acc = String::new();
+        let mut tool_calls: Vec<ToolCall> = Vec::new();
+
+        if let Some(candidates) = val.get("candidates").and_then(|c| c.as_array()) {
+            for cand in candidates {
+                if let Some(content) = cand.get("content") {
+                    if let Some(parts) = content.get("parts").and_then(|p| p.as_array()) {
+                        for part in parts {
+                            if let Some(txt) = part.get("text").and_then(|t| t.as_str()) {
+                                text_acc.push_str(txt);
+                            }
+                            if let Some(fc) = part.get("functionCall") {
+                                if let Some(name) = fc.get("name").and_then(|n| n.as_str()) {
+                                    let args_val = fc.get("args").cloned().unwrap_or_else(|| json!({}));
+                                    let args_str = serde_json::to_string(&args_val).unwrap_or_default();
+                                    let call_id = format!("call_gemini_{}_{}", tool_calls.len(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis());
+                                    tool_calls.push(ToolCall {
+                                        id: call_id,
+                                        call_type: "function".to_string(),
+                                        function: FunctionCall {
+                                            name: name.to_string(),
+                                            arguments: args_str,
+                                        },
+                                    });
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -953,6 +1507,344 @@ fn execute_anthropic_turn(
             reasoning_content: None,
         };
         conversation.push(assistant_msg);
+        if sink.is_channel() {
+            sink.send_event(AgentUiEvent::ContentChunk(final_text.clone()));
+        }
+
+        Ok((final_text, None))
+    }
+}
+
+/// Formats standard ChatMessage conversation turns into Ollama /api/chat messages format.
+pub fn build_ollama_messages(
+    system_prompt: &str,
+    conversation: &[ChatMessage],
+) -> Vec<serde_json::Value> {
+    let mut msgs = Vec::new();
+    if !system_prompt.trim().is_empty() {
+        msgs.push(json!({
+            "role": "system",
+            "content": system_prompt
+        }));
+    }
+    for msg in conversation {
+        match msg.role {
+            MessageRole::System => continue,
+            MessageRole::User => {
+                msgs.push(json!({
+                    "role": "user",
+                    "content": msg.content.clone().unwrap_or_default()
+                }));
+            }
+            MessageRole::Assistant => {
+                let mut m = json!({
+                    "role": "assistant",
+                    "content": msg.content.clone().unwrap_or_default()
+                });
+                if let Some(tcs) = &msg.tool_calls {
+                    let tool_calls_json: Vec<serde_json::Value> = tcs
+                        .iter()
+                        .map(|tc| {
+                            let parsed: serde_json::Value =
+                                serde_json::from_str(&tc.function.arguments)
+                                    .unwrap_or_else(|_| json!({}));
+                            json!({
+                                "function": {
+                                    "name": tc.function.name,
+                                    "arguments": parsed
+                                }
+                            })
+                        })
+                        .collect();
+                    m["tool_calls"] = serde_json::Value::Array(tool_calls_json);
+                }
+                msgs.push(m);
+            }
+            MessageRole::Tool => {
+                msgs.push(json!({
+                    "role": "tool",
+                    "content": msg.content.clone().unwrap_or_default()
+                }));
+            }
+        }
+    }
+    msgs
+}
+
+/// Converts internal tool definitions to Ollama's expected tools format.
+pub fn build_ollama_tools(tools_schema: &[ChatCompletionTool]) -> Option<serde_json::Value> {
+    if tools_schema.is_empty() {
+        return None;
+    }
+    Some(serde_json::to_value(tools_schema).unwrap_or(json!([])))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn execute_ollama_turn(
+    base_url: &str,
+    model: &str,
+    api_key: &str,
+    system_prompt: &str,
+    conversation: &mut Vec<ChatMessage>,
+    tools_schema: &[ChatCompletionTool],
+    stream: bool,
+    accumulated_prompt: &mut u64,
+    accumulated_completion: &mut u64,
+    accumulated_total: &mut u64,
+    sink: &OutputSink,
+    cancel_token: Option<&CancellationToken>,
+) -> Result<(String, Option<Vec<ToolCall>>)> {
+    let base = base_url.trim_end_matches('/');
+    let base = if base.ends_with("/v1") {
+        base.trim_end_matches("/v1")
+    } else {
+        base
+    };
+    let endpoint = format!("{}/api/chat", base);
+
+    let ollama_msgs = build_ollama_messages(system_prompt, conversation);
+    let mut body = json!({
+        "model": model,
+        "messages": ollama_msgs,
+        "stream": stream,
+        "options": {
+            "temperature": 0.2
+        }
+    });
+
+    if let Some(tools_val) = build_ollama_tools(tools_schema) {
+        body["tools"] = tools_val;
+    }
+
+    sink.emit_spinner("\r\x1B[36m✦\x1B[0m \x1B[90mThinking...\x1B[0m");
+
+    let mut request = ureq::post(&endpoint)
+        .set("Content-Type", "application/json")
+        .timeout(std::time::Duration::from_secs(120));
+
+    if !api_key.is_empty() && api_key != "none" && api_key != "ollama" {
+        request = request.set("Authorization", &format!("Bearer {}", api_key));
+    }
+
+    let response = request.send_json(body);
+    let res = match response {
+        Ok(r) => {
+            sink.clear_spinner();
+            r
+        }
+        Err(ureq::Error::Status(code, resp)) => {
+            sink.clear_spinner();
+            let err_body = resp.into_string().unwrap_or_default();
+            anyhow::bail!("Ollama API returned HTTP {}: {}", code, err_body);
+        }
+        Err(e) => {
+            sink.clear_spinner();
+            anyhow::bail!("Ollama request error: {}", e);
+        }
+    };
+
+    if stream {
+        let reader = BufReader::new(res.into_reader());
+        let mut accumulated_content = String::new();
+        let mut accumulated_tool_calls: Vec<ToolCall> = Vec::new();
+        let mut first_content = true;
+
+        for line_res in reader.lines() {
+            if let Some(token) = cancel_token {
+                if token.is_cancelled() {
+                    sink.emit_spinner("");
+                    sink.clear_spinner();
+                    anyhow::bail!("Streaming interrupted: Operation cancelled by user");
+                }
+            }
+            let line = match line_res {
+                Ok(l) => l,
+                Err(_) => break,
+            };
+            let trimmed = line.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+
+            if let Ok(val) = serde_json::from_str::<serde_json::Value>(trimmed) {
+                if let Some(in_tok) = val.get("prompt_eval_count").and_then(|n| n.as_u64()) {
+                    *accumulated_prompt += in_tok;
+                }
+                if let Some(out_tok) = val.get("eval_count").and_then(|n| n.as_u64()) {
+                    *accumulated_completion += out_tok;
+                }
+
+                if let Some(msg) = val.get("message") {
+                    if let Some(txt) = msg.get("content").and_then(|c| c.as_str()) {
+                        if !txt.is_empty() {
+                            if sink.is_channel() {
+                                sink.send_event(AgentUiEvent::ContentChunk(txt.to_string()));
+                            } else if !sink.is_silent() {
+                                if first_content {
+                                    print!("\r\x1B[K");
+                                    first_content = false;
+                                }
+                                print!("{}", txt);
+                                let _ = std::io::stdout().flush();
+                            }
+                            accumulated_content.push_str(txt);
+                        }
+                    }
+                    if let Some(tcs) = msg.get("tool_calls").and_then(|t| t.as_array()) {
+                        for tc in tcs {
+                            if let Some(func) = tc.get("function") {
+                                if let Some(name) = func.get("name").and_then(|n| n.as_str()) {
+                                    if !sink.is_silent() && !sink.is_channel() && first_content {
+                                        print!("\r\x1B[K");
+                                    }
+                                    let args_str = match func.get("arguments") {
+                                        Some(serde_json::Value::String(s)) => s.clone(),
+                                        Some(v) => serde_json::to_string(v).unwrap_or_default(),
+                                        None => "{}".to_string(),
+                                    };
+                                    let call_id = format!("call_ollama_{}_{}", accumulated_tool_calls.len(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis());
+                                    accumulated_tool_calls.push(ToolCall {
+                                        id: call_id,
+                                        call_type: "function".to_string(),
+                                        function: FunctionCall {
+                                            name: name.to_string(),
+                                            arguments: args_str,
+                                        },
+                                    });
+                                }
+                            }
+                        }
+                    }
+                }
+
+                if val.get("done").and_then(|d| d.as_bool()).unwrap_or(false) {
+                    break;
+                }
+            }
+        }
+
+        if !first_content && !sink.is_silent() && !sink.is_channel() {
+            println!();
+        }
+
+        *accumulated_total = *accumulated_prompt + *accumulated_completion;
+        accumulated_tool_calls.retain(|tc| !tc.function.name.trim().is_empty());
+
+        if !accumulated_tool_calls.is_empty() {
+            let assistant_msg = ChatMessage {
+                role: MessageRole::Assistant,
+                content: if accumulated_content.is_empty() {
+                    None
+                } else {
+                    Some(accumulated_content)
+                },
+                tool_calls: Some(accumulated_tool_calls.clone()),
+                tool_call_id: None,
+                name: None,
+                reasoning_content: None,
+            };
+            conversation.push(assistant_msg);
+            return Ok((String::new(), Some(accumulated_tool_calls)));
+        }
+
+        let final_text = if !accumulated_content.trim().is_empty() {
+            accumulated_content.trim().to_string()
+        } else {
+            "(No response content)".to_string()
+        };
+
+        let assistant_msg = ChatMessage {
+            role: MessageRole::Assistant,
+            content: Some(final_text.clone()),
+            tool_calls: None,
+            tool_call_id: None,
+            name: None,
+            reasoning_content: None,
+        };
+        conversation.push(assistant_msg);
+
+        Ok((final_text, None))
+    } else {
+        let raw_text = res.into_string().context("Failed to read Ollama response body")?;
+        let clean_json = extract_json_slice(&raw_text);
+        let val: serde_json::Value = serde_json::from_str(clean_json)
+            .with_context(|| format!("Failed to parse Ollama JSON: {}", clean_json))?;
+
+        if let Some(err) = val.get("error") {
+            let msg = err.as_str().unwrap_or("Ollama API error");
+            anyhow::bail!("Ollama error: {}", msg);
+        }
+
+        if let Some(in_tok) = val.get("prompt_eval_count").and_then(|n| n.as_u64()) {
+            *accumulated_prompt += in_tok;
+        }
+        if let Some(out_tok) = val.get("eval_count").and_then(|n| n.as_u64()) {
+            *accumulated_completion += out_tok;
+        }
+        *accumulated_total = *accumulated_prompt + *accumulated_completion;
+
+        let mut text_acc = String::new();
+        let mut tool_calls: Vec<ToolCall> = Vec::new();
+
+        if let Some(msg) = val.get("message") {
+            if let Some(txt) = msg.get("content").and_then(|t| t.as_str()) {
+                text_acc.push_str(txt);
+            }
+            if let Some(tcs) = msg.get("tool_calls").and_then(|t| t.as_array()) {
+                for tc in tcs {
+                    if let Some(func) = tc.get("function") {
+                        if let Some(name) = func.get("name").and_then(|n| n.as_str()) {
+                            let args_str = match func.get("arguments") {
+                                Some(serde_json::Value::String(s)) => s.clone(),
+                                Some(v) => serde_json::to_string(v).unwrap_or_default(),
+                                None => "{}".to_string(),
+                            };
+                            let call_id = format!("call_ollama_{}_{}", tool_calls.len(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis());
+                            tool_calls.push(ToolCall {
+                                id: call_id,
+                                call_type: "function".to_string(),
+                                function: FunctionCall {
+                                    name: name.to_string(),
+                                    arguments: args_str,
+                                },
+                            });
+                        }
+                    }
+                }
+            }
+        }
+
+        if !tool_calls.is_empty() {
+            let assistant_msg = ChatMessage {
+                role: MessageRole::Assistant,
+                content: if text_acc.is_empty() { None } else { Some(text_acc) },
+                tool_calls: Some(tool_calls.clone()),
+                tool_call_id: None,
+                name: None,
+                reasoning_content: None,
+            };
+            conversation.push(assistant_msg);
+            return Ok((String::new(), Some(tool_calls)));
+        }
+
+        let final_text = if !text_acc.trim().is_empty() {
+            text_acc.trim().to_string()
+        } else {
+            "(No response content)".to_string()
+        };
+
+        let assistant_msg = ChatMessage {
+            role: MessageRole::Assistant,
+            content: Some(final_text.clone()),
+            tool_calls: None,
+            tool_call_id: None,
+            name: None,
+            reasoning_content: None,
+        };
+        conversation.push(assistant_msg);
+        if sink.is_channel() {
+            sink.send_event(AgentUiEvent::ContentChunk(final_text.clone()));
+        }
 
         Ok((final_text, None))
     }
@@ -961,8 +1853,8 @@ fn execute_anthropic_turn(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Arc;
     use crate::agent::tasks::TaskLogBuffer;
+    use std::sync::Arc;
 
     #[test]
     fn test_output_sink_silence_contract() {
@@ -984,7 +1876,8 @@ mod tests {
     fn test_tool_args_summary_truncation() {
         let long_arg = json!({
             "path": "very_long_file_name_exceeding_thirty_five_characters.rs"
-        }).to_string();
+        })
+        .to_string();
         let summary = format_tool_args_summary("read_file", &long_arg);
         assert!(summary.contains("..."));
         assert!(summary.starts_with('('));
@@ -997,9 +1890,8 @@ mod tests {
         token.cancel();
 
         let mut conversation = Vec::new();
-        let mut permission_gate = PermissionGate {
-            mode: crate::agent::permissions::PermissionMode::AutoApprove,
-        };
+        let mut permission_gate =
+            PermissionGate::new(crate::agent::permissions::PermissionMode::AutoApprove);
 
         let res = run_agent_loop(
             "test prompt",
@@ -1020,5 +1912,107 @@ mod tests {
         assert!(res.is_err());
         let err_msg = res.unwrap_err().to_string();
         assert!(err_msg.contains("Task cancelled"));
+    }
+
+    #[test]
+    fn test_build_gemini_contents_and_tools() {
+        let conversation = vec![
+            ChatMessage::user("read main.rs"),
+            ChatMessage {
+                role: MessageRole::Assistant,
+                content: None,
+                tool_calls: Some(vec![ToolCall {
+                    id: "call_1".to_string(),
+                    call_type: "function".to_string(),
+                    function: FunctionCall {
+                        name: "read_file".to_string(),
+                        arguments: json!({"path": "src/main.rs"}).to_string(),
+                    },
+                }]),
+                tool_call_id: None,
+                name: None,
+                reasoning_content: None,
+            },
+            ChatMessage::tool_result("call_1", "read_file", "fn main() {}"),
+        ];
+
+        let contents = build_gemini_contents(&conversation);
+        assert_eq!(contents.len(), 3);
+        assert_eq!(contents[0]["role"], "user");
+        assert_eq!(contents[0]["parts"][0]["text"], "read main.rs");
+        assert_eq!(contents[1]["role"], "model");
+        assert_eq!(contents[1]["parts"][0]["functionCall"]["name"], "read_file");
+        assert_eq!(contents[1]["parts"][0]["functionCall"]["args"]["path"], "src/main.rs");
+        assert_eq!(contents[2]["role"], "function");
+        assert_eq!(contents[2]["parts"][0]["functionResponse"]["name"], "read_file");
+
+        let tools_schema = get_available_tools();
+        let tools_val = build_gemini_tools(&tools_schema);
+        assert!(tools_val.is_some());
+        let decls = &tools_val.unwrap()[0]["functionDeclarations"];
+        assert!(decls.as_array().unwrap().len() >= 4);
+    }
+
+    #[test]
+    fn test_build_ollama_messages_and_tools() {
+        let conversation = vec![
+            ChatMessage::user("test prompt"),
+            ChatMessage {
+                role: MessageRole::Assistant,
+                content: Some("calling tool".to_string()),
+                tool_calls: Some(vec![ToolCall {
+                    id: "call_2".to_string(),
+                    call_type: "function".to_string(),
+                    function: FunctionCall {
+                        name: "run_command".to_string(),
+                        arguments: json!({"cmd": "dir"}).to_string(),
+                    },
+                }]),
+                tool_call_id: None,
+                name: None,
+                reasoning_content: None,
+            },
+            ChatMessage::tool_result("call_2", "run_command", "output"),
+        ];
+
+        let msgs = build_ollama_messages("You are an expert", &conversation);
+        assert_eq!(msgs.len(), 4);
+        assert_eq!(msgs[0]["role"], "system");
+        assert_eq!(msgs[0]["content"], "You are an expert");
+        assert_eq!(msgs[1]["role"], "user");
+        assert_eq!(msgs[2]["role"], "assistant");
+        assert!(msgs[2]["tool_calls"].is_array());
+        assert_eq!(msgs[3]["role"], "tool");
+
+        let tools_schema = get_available_tools();
+        let tools_val = build_ollama_tools(&tools_schema);
+        assert!(tools_val.is_some());
+    }
+
+    #[test]
+    fn test_effective_stream_tui_channel_contract() {
+        use std::sync::mpsc::channel;
+        let (tx, _rx) = channel();
+        let channel_sink = OutputSink::Channel(tx);
+        let buf = Arc::new(TaskLogBuffer::new());
+        let buffered_sink = OutputSink::Buffered(buf);
+        let terminal_sink = OutputSink::Terminal;
+
+        let channel_stream = match &channel_sink {
+            OutputSink::Buffered(_) => false,
+            OutputSink::Terminal | OutputSink::Channel(_) => true,
+        };
+        let buffered_stream = match &buffered_sink {
+            OutputSink::Buffered(_) => false,
+            OutputSink::Terminal | OutputSink::Channel(_) => true,
+        };
+        let terminal_stream = match &terminal_sink {
+            OutputSink::Buffered(_) => false,
+            OutputSink::Terminal | OutputSink::Channel(_) => true,
+        };
+
+        assert!(channel_stream, "Channel sink must stream to avoid TUI starvation");
+        assert!(!buffered_stream, "Buffered sink must not stream to prevent output leakage");
+        assert!(terminal_stream, "Terminal sink must stream");
     }
 }

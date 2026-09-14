@@ -1,45 +1,50 @@
 #[cfg(test)]
+#[allow(clippy::module_inception)]
 mod tests {
     use crate::agent::checkpoint::{format_color_diff, generate_unified_diff, CheckpointManager};
     use crate::agent::compaction::estimate_tokens;
     use crate::tools::filesystem::{edit_file, read_file, write_file};
+    use crate::tools::get_available_tools;
     use crate::tools::mcp::McpConfigFile;
     use crate::tools::result_store::ResultStore;
     use crate::tools::search::{glob_files, grep_files};
     use crate::tools::self_heal::check_file_diagnostics;
     use crate::tools::web::html_to_markdown;
-    use crate::tools::get_available_tools;
     use crate::types::{ChatMessage, MessageRole};
 
     #[test]
     fn test_filesystem_lifecycle() {
         let temp_dir = std::env::temp_dir().join("ctrl_cli_test_fs");
-        let test_file = temp_dir.join("sample.txt");
-        let test_path = test_file.to_str().unwrap();
+        let _ = std::fs::create_dir_all(&temp_dir);
 
-        // 1. Write file
-        let initial_content = "Line 1\nLine 2: Target to replace\nLine 3\nLine 4\nLine 5";
-        let write_res = write_file(test_path, initial_content, Some(true));
-        assert!(write_res.is_ok(), "Write file should succeed");
+        crate::tools::filesystem::with_workspace_root(temp_dir.clone(), || {
+            let test_file = temp_dir.join("sample.txt");
+            let test_path = test_file.to_str().unwrap();
 
-        // 2. Read file with range
-        let read_res = read_file(test_path, Some(2), Some(4)).unwrap();
-        assert!(read_res.contains("Target to replace"));
-        assert!(read_res.contains("   2:"));
+            // 1. Write file
+            let initial_content = "Line 1\nLine 2: Target to replace\nLine 3\nLine 4\nLine 5";
+            let write_res = write_file(test_path, initial_content, Some(true));
+            assert!(write_res.is_ok(), "Write file should succeed");
 
-        // 3. Edit file (chunk replace)
-        let edit_res = edit_file(
-            test_path,
-            "Line 2: Target to replace",
-            "Line 2: Replaced Content Successfully",
-            Some(false),
-        );
-        assert!(edit_res.is_ok(), "Edit file should succeed");
+            // 2. Read file with range
+            let read_res = read_file(test_path, Some(2), Some(4)).unwrap();
+            assert!(read_res.contains("Target to replace"));
+            assert!(read_res.contains("   2:"));
 
-        // 4. Verify edited content
-        let verify_read = read_file(test_path, None, None).unwrap();
-        assert!(verify_read.contains("Replaced Content Successfully"));
-        assert!(!verify_read.contains("Target to replace"));
+            // 3. Edit file (chunk replace)
+            let edit_res = edit_file(
+                test_path,
+                "Line 2: Target to replace",
+                "Line 2: Replaced Content Successfully",
+                Some(false),
+            );
+            assert!(edit_res.is_ok(), "Edit file should succeed");
+
+            // 4. Verify edited content
+            let verify_read = read_file(test_path, None, None).unwrap();
+            assert!(verify_read.contains("Replaced Content Successfully"));
+            assert!(!verify_read.contains("Target to replace"));
+        });
 
         // Cleanup
         let _ = std::fs::remove_dir_all(temp_dir);
@@ -48,13 +53,77 @@ mod tests {
     #[test]
     fn test_edit_file_target_not_found() {
         let temp_dir = std::env::temp_dir().join("ctrl_cli_test_edit_err");
-        let test_file = temp_dir.join("sample2.txt");
-        let test_path = test_file.to_str().unwrap();
+        let _ = std::fs::create_dir_all(&temp_dir);
 
-        let _ = write_file(test_path, "Hello World\nRust Agent", Some(true));
-        let err = edit_file(test_path, "Nonexistent text", "Something", Some(false));
-        assert!(err.is_err());
-        assert!(err.unwrap_err().to_string().contains("Target content was not found"));
+        crate::tools::filesystem::with_workspace_root(temp_dir.clone(), || {
+            let test_file = temp_dir.join("sample2.txt");
+            let test_path = test_file.to_str().unwrap();
+
+            let _ = write_file(test_path, "Hello World\nRust Agent", Some(true));
+            let err = edit_file(test_path, "Nonexistent text", "Something", Some(false));
+            assert!(err.is_err());
+            assert!(err
+                .unwrap_err()
+                .to_string()
+                .contains("Target content was not found"));
+        });
+
+        let _ = std::fs::remove_dir_all(temp_dir);
+    }
+
+    #[test]
+    fn test_sandboxing_rejection_and_allowances() {
+        let temp_dir = std::env::temp_dir().join("ctrl_cli_test_sandboxing");
+        let _ = std::fs::create_dir_all(&temp_dir);
+
+        crate::tools::filesystem::with_workspace_root(temp_dir.clone(), || {
+            // 1. Legitimate subpath inside workspace
+            let safe = crate::tools::filesystem::resolve_sandboxed_path("sub/file.txt");
+            assert!(safe.is_ok());
+
+            // 2. Traversal attempt: ../outside.txt
+            let err1 = crate::tools::filesystem::resolve_sandboxed_path("../outside.txt");
+            assert!(err1.is_err());
+            let err_msg1 = err1.unwrap_err().to_string();
+            assert!(err_msg1.contains("Access denied") && err_msg1.contains("outside the workspace"));
+
+            // 3. Multi-level traversal: ../../../secret.txt
+            let err2 = crate::tools::filesystem::resolve_sandboxed_path("../../../secret.txt");
+            assert!(err2.is_err());
+
+            // 4. Nested traversal: sub/../../secret.txt
+            let err3 = crate::tools::filesystem::resolve_sandboxed_path("sub/../../secret.txt");
+            assert!(err3.is_err());
+
+            // 5. Absolute system path outside workspace
+            #[cfg(windows)]
+            let outside_abs = r"C:\Windows\System32\cmd.exe";
+            #[cfg(not(windows))]
+            let outside_abs = "/etc/shadow";
+
+            let err4 = crate::tools::filesystem::resolve_sandboxed_path(outside_abs);
+            assert!(err4.is_err());
+            assert!(err4.unwrap_err().to_string().contains("Access denied"));
+
+            // 6. Dot root allowance
+            let dot = crate::tools::filesystem::resolve_sandboxed_path(".");
+            assert!(dot.is_ok());
+
+            // 7. Test read_file traversal rejection
+            let read_err = read_file("../outside.txt", None, None);
+            assert!(read_err.is_err());
+            assert!(read_err.unwrap_err().to_string().contains("Access denied"));
+
+            // 8. Test write_file traversal rejection
+            let write_err = write_file("../outside.txt", "evil", Some(true));
+            assert!(write_err.is_err());
+            assert!(write_err.unwrap_err().to_string().contains("Access denied"));
+
+            // 9. Test edit_file traversal rejection
+            let edit_err = edit_file("../outside.txt", "a", "b", Some(false));
+            assert!(edit_err.is_err());
+            assert!(edit_err.unwrap_err().to_string().contains("Access denied"));
+        });
 
         let _ = std::fs::remove_dir_all(temp_dir);
     }
@@ -85,7 +154,16 @@ mod tests {
         let glob_res = glob_files("*.toml", Some("."), Some("list")).unwrap();
         assert!(glob_res.contains("Cargo.toml"));
 
-        let grep_res = grep_files("ctrl-cli", Some("."), Some("Cargo.toml"), Some(false), Some(10), Some(1), Some(1)).unwrap();
+        let grep_res = grep_files(
+            "ctrl-cli",
+            Some("."),
+            Some("Cargo.toml"),
+            Some(false),
+            Some(10),
+            Some(1),
+            Some(1),
+        )
+        .unwrap();
         assert!(grep_res.contains("Cargo.toml"));
     }
 
@@ -107,12 +185,18 @@ mod tests {
 
             // Mutate file
             std::fs::write(&test_file, b"Mutated Content V2").unwrap();
-            assert_eq!(std::fs::read_to_string(&test_file).unwrap(), "Mutated Content V2");
+            assert_eq!(
+                std::fs::read_to_string(&test_file).unwrap(),
+                "Mutated Content V2"
+            );
 
             // Undo
             let undo_res = CheckpointManager::undo_last().unwrap();
             assert!(undo_res.contains("Restored previous state"));
-            assert_eq!(std::fs::read_to_string(&test_file).unwrap(), "Original Content V1");
+            assert_eq!(
+                std::fs::read_to_string(&test_file).unwrap(),
+                "Original Content V1"
+            );
         });
 
         let _ = std::fs::remove_dir_all(temp_dir);
@@ -259,7 +343,13 @@ mod tests {
         assert_eq!(before_len, 11);
 
         // Compact context using force_compact_context
-        let res = crate::agent::compaction::force_compact_context(&mut conversation, "dummy-model", "fake-key", "http://127.0.0.1", crate::agent::provider::ApiProtocol::OpenAi);
+        let res = crate::agent::compaction::force_compact_context(
+            &mut conversation,
+            "dummy-model",
+            "fake-key",
+            "http://127.0.0.1",
+            crate::agent::provider::ApiProtocol::OpenAi,
+        );
         assert!(res.is_ok());
 
         // Verify boundary safety:
@@ -267,7 +357,11 @@ mod tests {
         assert_eq!(conversation[0].role, MessageRole::System);
         // 2. Second message must be the summary
         assert_eq!(conversation[1].role, MessageRole::User);
-        assert!(conversation[1].content.as_ref().unwrap().contains("Context Compaction"));
+        assert!(conversation[1]
+            .content
+            .as_ref()
+            .unwrap()
+            .contains("Context Compaction"));
         // 3. Third message must NOT be a Tool result (no orphan Tool messages allowed!)
         assert_ne!(conversation[2].role, MessageRole::Tool);
         // 4. Verify no tool message in the entire conversation is preceded by a non-assistant message
@@ -318,7 +412,10 @@ mod tests {
         assert!(cfg.mcp_servers.contains_key("sqlite"));
         let sqlite = &cfg.mcp_servers["sqlite"];
         assert_eq!(sqlite.command, "uvx");
-        assert_eq!(sqlite.args, vec!["mcp-server-sqlite", "--db-path", "test.db"]);
+        assert_eq!(
+            sqlite.args,
+            vec!["mcp-server-sqlite", "--db-path", "test.db"]
+        );
         assert_eq!(sqlite.env.get("DEBUG").unwrap(), "1");
     }
 
@@ -345,10 +442,15 @@ mod tests {
         assert!(tool_names.contains(&"manage_task".to_string()));
 
         // Verify subagent tool has background parameter
-        let subagent_tool = tools.iter().find(|t| t.function.name == "subagent").unwrap();
+        let subagent_tool = tools
+            .iter()
+            .find(|t| t.function.name == "subagent")
+            .unwrap();
         let params = &subagent_tool.function.parameters;
-        assert!(params["properties"]["background"].is_object(),
-            "subagent tool should have 'background' parameter");
+        assert!(
+            params["properties"]["background"].is_object(),
+            "subagent tool should have 'background' parameter"
+        );
     }
 
     #[test]
@@ -440,8 +542,8 @@ mod tests {
 
     #[test]
     fn test_slash_completer_suggestions_and_tab_complete() {
-        use inquire::autocompletion::{Autocomplete, Replacement};
         use crate::SlashCompleter;
+        use inquire::autocompletion::{Autocomplete, Replacement};
 
         let mut completer = SlashCompleter;
 
@@ -478,25 +580,59 @@ mod tests {
         use crate::{build_system_prompt, SupportedLanguage, UserProfile};
 
         // 1. Language parsing including abbreviations
-        assert_eq!(SupportedLanguage::from_str("en"), SupportedLanguage::English);
-        assert_eq!(SupportedLanguage::from_str("english"), SupportedLanguage::English);
-        assert_eq!(SupportedLanguage::from_str("id"), SupportedLanguage::Indonesian);
-        assert_eq!(SupportedLanguage::from_str("in"), SupportedLanguage::Indonesian);
-        assert_eq!(SupportedLanguage::from_str("ina"), SupportedLanguage::Indonesian);
-        assert_eq!(SupportedLanguage::from_str("Bahasa Indonesia"), SupportedLanguage::Indonesian);
-        assert_eq!(SupportedLanguage::from_str("zh"), SupportedLanguage::Chinese);
-        assert_eq!(SupportedLanguage::from_str("cn"), SupportedLanguage::Chinese);
-        assert_eq!(SupportedLanguage::from_str("中文"), SupportedLanguage::Chinese);
-        assert_eq!(SupportedLanguage::from_str("chinese"), SupportedLanguage::Chinese);
+        assert_eq!(
+            SupportedLanguage::from_str("en"),
+            SupportedLanguage::English
+        );
+        assert_eq!(
+            SupportedLanguage::from_str("english"),
+            SupportedLanguage::English
+        );
+        assert_eq!(
+            SupportedLanguage::from_str("id"),
+            SupportedLanguage::Indonesian
+        );
+        assert_eq!(
+            SupportedLanguage::from_str("in"),
+            SupportedLanguage::Indonesian
+        );
+        assert_eq!(
+            SupportedLanguage::from_str("ina"),
+            SupportedLanguage::Indonesian
+        );
+        assert_eq!(
+            SupportedLanguage::from_str("Bahasa Indonesia"),
+            SupportedLanguage::Indonesian
+        );
+        assert_eq!(
+            SupportedLanguage::from_str("zh"),
+            SupportedLanguage::Chinese
+        );
+        assert_eq!(
+            SupportedLanguage::from_str("cn"),
+            SupportedLanguage::Chinese
+        );
+        assert_eq!(
+            SupportedLanguage::from_str("中文"),
+            SupportedLanguage::Chinese
+        );
+        assert_eq!(
+            SupportedLanguage::from_str("chinese"),
+            SupportedLanguage::Chinese
+        );
 
         // 2. Directives content
         assert!(SupportedLanguage::English.directive().contains("English"));
-        assert!(SupportedLanguage::Indonesian.directive().contains("Bahasa Indonesia"));
+        assert!(SupportedLanguage::Indonesian
+            .directive()
+            .contains("Bahasa Indonesia"));
         assert!(SupportedLanguage::Chinese.directive().contains("中文"));
 
         // 3. System prompt inclusion
-        let mut profile = UserProfile::default();
-        profile.response_language = "English".to_string();
+        let mut profile = UserProfile {
+            response_language: "English".to_string(),
+            ..Default::default()
+        };
         let prompt_en = build_system_prompt(None, &profile);
         assert!(prompt_en.contains("[Active Communication Language: English]"));
 
@@ -545,7 +681,11 @@ mod tests {
 
         // Test update limits
         reg.update_limits("my-test-vllm", 131_072, Some(8_192));
-        let updated = reg.providers.iter().find(|p| p.id == "my-test-vllm").unwrap();
+        let updated = reg
+            .providers
+            .iter()
+            .find(|p| p.id == "my-test-vllm")
+            .unwrap();
         assert_eq!(updated.context_window, Some(131_072));
         assert_eq!(updated.max_output_tokens, Some(8_192));
 
@@ -605,8 +745,8 @@ mod tests {
     #[test]
     fn test_anthropic_payload_and_tool_conversion() {
         use crate::agent::orchestrator::{build_anthropic_messages, build_anthropic_tools};
-        use crate::types::{ChatMessage, FunctionCall, ToolCall};
         use crate::tools::get_available_tools;
+        use crate::types::{ChatMessage, FunctionCall, ToolCall};
 
         // 1. Tool conversion
         let tools = get_available_tools();
@@ -638,7 +778,11 @@ mod tests {
             reasoning_content: None,
         };
         conv.push(assistant_with_tools);
-        conv.push(ChatMessage::tool_result("call_123", "read_file", "fn main() {}"));
+        conv.push(ChatMessage::tool_result(
+            "call_123",
+            "read_file",
+            "fn main() {}",
+        ));
 
         let anthropic_msgs = build_anthropic_messages(&conv);
         // System message filtered from messages
@@ -649,11 +793,15 @@ mod tests {
 
         // Tool use block present in assistant content
         let asst_blocks = anthropic_msgs[1]["content"].as_array().unwrap();
-        assert!(asst_blocks.iter().any(|b| b["type"] == "tool_use" && b["id"] == "call_123"));
+        assert!(asst_blocks
+            .iter()
+            .any(|b| b["type"] == "tool_use" && b["id"] == "call_123"));
 
         // Tool result block present in user content
         let tool_res_blocks = anthropic_msgs[2]["content"].as_array().unwrap();
-        assert!(tool_res_blocks.iter().any(|b| b["type"] == "tool_result" && b["tool_use_id"] == "call_123"));
+        assert!(tool_res_blocks
+            .iter()
+            .any(|b| b["type"] == "tool_result" && b["tool_use_id"] == "call_123"));
     }
 
     #[test]
@@ -682,7 +830,11 @@ mod tests {
         );
         assert!(res.is_ok());
         assert!(conv.len() < before_len);
-        assert!(conv[1].content.as_ref().unwrap().contains("Context Compaction"));
+        assert!(conv[1]
+            .content
+            .as_ref()
+            .unwrap()
+            .contains("Context Compaction"));
     }
 
     #[test]
@@ -693,7 +845,11 @@ mod tests {
         let mut all_primaries = HashSet::new();
         for spec in COMMAND_SPECS {
             assert!(spec.primary.starts_with('/'));
-            assert!(all_primaries.insert(spec.primary), "Duplicate primary command: {}", spec.primary);
+            assert!(
+                all_primaries.insert(spec.primary),
+                "Duplicate primary command: {}",
+                spec.primary
+            );
             for alias in spec.aliases {
                 assert!(!alias.is_empty());
             }
@@ -720,14 +876,16 @@ mod tests {
         use std::time::Duration;
 
         let tm = TaskManager::global();
-        let (id, _token) = tm.spawn_task(
-            "test_dispatch".to_string(),
-            "testing dispatch_manage_task".to_string(),
-            |_| {
-                thread::sleep(Duration::from_millis(50));
-                Ok("dispatch success".to_string())
-            },
-        ).unwrap();
+        let (id, _token) = tm
+            .spawn_task(
+                "test_dispatch".to_string(),
+                "testing dispatch_manage_task".to_string(),
+                |_| {
+                    thread::sleep(Duration::from_millis(50));
+                    Ok("dispatch success".to_string())
+                },
+            )
+            .unwrap();
 
         // 1. Status query
         let status_args = format!(r#"{{"action":"status","task_id":"{}"}}"#, id);
@@ -736,7 +894,10 @@ mod tests {
         assert!(status_res.contains("test_dispatch"));
 
         // 2. Await task
-        let await_args = format!(r#"{{"action":"await","task_id":"{}","timeout_secs":5}}"#, id);
+        let await_args = format!(
+            r#"{{"action":"await","task_id":"{}","timeout_secs":5}}"#,
+            id
+        );
         let await_res = crate::tools::dispatch_tool("manage_task", &await_args).unwrap();
         assert!(await_res.contains("finished"));
         assert!(await_res.contains("dispatch success"));
@@ -753,26 +914,31 @@ mod tests {
         use std::time::Duration;
 
         let tm = TaskManager::global();
-        let (id, _token) = tm.spawn_task(
-            "test_cancel".to_string(),
-            "testing cancellation dispatch".to_string(),
-            |token| {
-                for _ in 0..100 {
-                    if token.is_cancelled() {
-                        return Err(anyhow::anyhow!("cancelled cleanly"));
+        let (id, _token) = tm
+            .spawn_task(
+                "test_cancel".to_string(),
+                "testing cancellation dispatch".to_string(),
+                |token| {
+                    for _ in 0..100 {
+                        if token.is_cancelled() {
+                            return Err(anyhow::anyhow!("cancelled cleanly"));
+                        }
+                        thread::sleep(Duration::from_millis(20));
                     }
-                    thread::sleep(Duration::from_millis(20));
-                }
-                Ok("done".to_string())
-            },
-        ).unwrap();
+                    Ok("done".to_string())
+                },
+            )
+            .unwrap();
 
         let cancel_args = format!(r#"{{"action":"cancel","task_id":"{}"}}"#, id);
         let cancel_res = crate::tools::dispatch_tool("manage_task", &cancel_args).unwrap();
         assert!(cancel_res.contains("has been cancelled"));
 
         // Await to ensure it transitioned to terminal
-        let await_args = format!(r#"{{"action":"await","task_id":"{}","timeout_secs":5}}"#, id);
+        let await_args = format!(
+            r#"{{"action":"await","task_id":"{}","timeout_secs":5}}"#,
+            id
+        );
         let await_res = crate::tools::dispatch_tool("manage_task", &await_args).unwrap();
         assert!(await_res.contains("cancelled") || await_res.contains("finished"));
     }
@@ -782,13 +948,13 @@ mod tests {
         use crate::agent::tasks::TaskManager;
 
         let tm = TaskManager::global();
-        let (id, _token) = tm.spawn_task(
-            "test_status_logs".to_string(),
-            "testing logs in status".to_string(),
-            |_| {
-                Ok("done".to_string())
-            },
-        ).unwrap();
+        let (id, _token) = tm
+            .spawn_task(
+                "test_status_logs".to_string(),
+                "testing logs in status".to_string(),
+                |_| Ok("done".to_string()),
+            )
+            .unwrap();
 
         // Push some logs to the task's log buffer
         if let Some(task) = tm.get_inner(&id) {
@@ -811,13 +977,13 @@ mod tests {
         use crate::agent::tasks::TaskManager;
 
         let tm = TaskManager::global();
-        let (id, _token) = tm.spawn_task(
-            "test_logs_action".to_string(),
-            "testing logs action".to_string(),
-            |_| {
-                Ok("done".to_string())
-            },
-        ).unwrap();
+        let (id, _token) = tm
+            .spawn_task(
+                "test_logs_action".to_string(),
+                "testing logs action".to_string(),
+                |_| Ok("done".to_string()),
+            )
+            .unwrap();
 
         if let Some(task) = tm.get_inner(&id) {
             for i in 0..25 {
@@ -847,11 +1013,13 @@ mod tests {
         use crate::agent::tasks::TaskManager;
 
         let tm = TaskManager::global();
-        let (id, _token) = tm.spawn_task(
-            "test_empty_logs".to_string(),
-            "testing empty logs".to_string(),
-            |_| Ok("ok".to_string()),
-        ).unwrap();
+        let (id, _token) = tm
+            .spawn_task(
+                "test_empty_logs".to_string(),
+                "testing empty logs".to_string(),
+                |_| Ok("ok".to_string()),
+            )
+            .unwrap();
 
         let logs_args = format!(r#"{{"action":"logs","task_id":"{}"}}"#, id);
         let res = crate::tools::dispatch_tool("manage_task", &logs_args).unwrap();
@@ -869,7 +1037,8 @@ mod tests {
     fn test_manage_task_dispatch_invalid_action() {
         let invalid_args = r#"{"action":"invalid_xyz"}"#;
         let err = crate::tools::dispatch_tool("manage_task", invalid_args).unwrap_err();
-        assert!(err.to_string().contains("Valid: list, status, await, cancel, logs"));
+        assert!(err
+            .to_string()
+            .contains("Valid: list, status, await, cancel, logs"));
     }
 }
-

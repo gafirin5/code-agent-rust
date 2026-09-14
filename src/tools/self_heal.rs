@@ -6,7 +6,11 @@ use std::process::Command;
 /// Returns Some(diagnostics) if errors or significant warnings are found.
 pub fn check_file_diagnostics(file_path_str: &str) -> Option<String> {
     let path = Path::new(file_path_str);
-    let ext = path.extension().and_then(|s| s.to_str()).unwrap_or("").to_lowercase();
+    let ext = path
+        .extension()
+        .and_then(|s| s.to_str())
+        .unwrap_or("")
+        .to_lowercase();
 
     match ext.as_str() {
         "rs" => check_rust_diagnostics(path),
@@ -24,9 +28,15 @@ pub fn run_code_check(target: Option<&str>) -> Result<String> {
         let p = Path::new(t);
         if p.is_file() {
             if let Some(diag) = check_file_diagnostics(t) {
-                return Ok(format!("Compiler/Syntax Diagnostics for '{}':\n\n{}", t, diag));
+                return Ok(format!(
+                    "Compiler/Syntax Diagnostics for '{}':\n\n{}",
+                    t, diag
+                ));
             } else {
-                return Ok(format!("✔ No syntax or compiler errors detected in '{}'.", t));
+                return Ok(format!(
+                    "✔ No syntax or compiler errors detected in '{}'.",
+                    t
+                ));
             }
         }
     }
@@ -177,7 +187,11 @@ fn check_typescript_diagnostics(file_path: &Path) -> Option<String> {
         let stdout = String::from_utf8_lossy(&output.stdout);
         let stderr = String::from_utf8_lossy(&output.stderr);
         let combined = format!("{}\n{}", stdout, stderr);
-        let lines: Vec<&str> = combined.lines().filter(|l| l.contains("error TS")).take(10).collect();
+        let lines: Vec<&str> = combined
+            .lines()
+            .filter(|l| l.contains("error TS"))
+            .take(10)
+            .collect();
         if !lines.is_empty() {
             Some(lines.join("\n"))
         } else {
@@ -209,7 +223,11 @@ fn check_javascript_diagnostics(file_path: &Path) -> Option<String> {
 fn check_json_diagnostics(file_path: &Path) -> Option<String> {
     if let Ok(content) = std::fs::read_to_string(file_path) {
         if let Err(e) = serde_json::from_str::<serde_json::Value>(&content) {
-            return Some(format!("Invalid JSON syntax in '{}': {}", file_path.display(), e));
+            return Some(format!(
+                "Invalid JSON syntax in '{}': {}",
+                file_path.display(),
+                e
+            ));
         }
     }
     None

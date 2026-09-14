@@ -1,3 +1,4 @@
+use crate::types::{ChatCompletionTool, FunctionDefinition};
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -5,7 +6,6 @@ use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Write};
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
-use crate::types::{ChatCompletionTool, FunctionDefinition};
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct McpServerConfig {
@@ -75,20 +75,25 @@ impl McpManager {
     pub fn dispatch(full_name: &str, arguments_json: &str) -> Result<String> {
         let parts: Vec<&str> = full_name.splitn(3, "__").collect();
         if parts.len() < 3 || parts[0] != "mcp" {
-            anyhow::bail!("Invalid MCP tool name format: '{}'. Expected 'mcp__<server>__<tool>'", full_name);
+            anyhow::bail!(
+                "Invalid MCP tool name format: '{}'. Expected 'mcp__<server>__<tool>'",
+                full_name
+            );
         }
 
         let server_name = parts[1];
         let actual_tool = parts[2];
 
         let cfg = Self::load_config().context("No MCP configuration found (.ctrl/mcp.json)")?;
-        let server_cfg = cfg
-            .mcp_servers
-            .get(server_name)
-            .with_context(|| format!("MCP server '{}' is not defined in configuration", server_name))?;
+        let server_cfg = cfg.mcp_servers.get(server_name).with_context(|| {
+            format!(
+                "MCP server '{}' is not defined in configuration",
+                server_name
+            )
+        })?;
 
-        let args_value: serde_json::Value = serde_json::from_str(arguments_json)
-            .unwrap_or_else(|_| json!({}));
+        let args_value: serde_json::Value =
+            serde_json::from_str(arguments_json).unwrap_or_else(|_| json!({}));
 
         call_server_tool(server_cfg, actual_tool, args_value)
     }
@@ -112,10 +117,17 @@ impl McpManager {
         for (name, s_cfg) in &cfg.mcp_servers {
             let tools = query_server_tools(name, s_cfg).unwrap_or_default();
             out.push_str(&format!(" • Server: \x1B[1m{}\x1B[0m\n", name));
-            out.push_str(&format!("   Command: {} {}\n", s_cfg.command, s_cfg.args.join(" ")));
+            out.push_str(&format!(
+                "   Command: {} {}\n",
+                s_cfg.command,
+                s_cfg.args.join(" ")
+            ));
             out.push_str(&format!("   Tools Loaded: {} tool(s)\n", tools.len()));
             for t in &tools {
-                out.push_str(&format!("     - {}: {}\n", t.function.name, t.function.description));
+                out.push_str(&format!(
+                    "     - {}: {}\n",
+                    t.function.name, t.function.description
+                ));
             }
             out.push('\n');
         }
@@ -127,28 +139,29 @@ impl McpManager {
 fn prepare_command(cmd_name: &str) -> Command {
     #[cfg(windows)]
     {
-        let resolved = if !cmd_name.contains('.') && !cmd_name.contains('/') && !cmd_name.contains('\\') {
-            if let Ok(path_var) = std::env::var("PATH") {
-                let mut found = None;
-                for dir in std::env::split_paths(&path_var) {
-                    let cmd_path = dir.join(format!("{}.cmd", cmd_name));
-                    if cmd_path.is_file() {
-                        found = Some(cmd_path.to_string_lossy().to_string());
-                        break;
+        let resolved =
+            if !cmd_name.contains('.') && !cmd_name.contains('/') && !cmd_name.contains('\\') {
+                if let Ok(path_var) = std::env::var("PATH") {
+                    let mut found = None;
+                    for dir in std::env::split_paths(&path_var) {
+                        let cmd_path = dir.join(format!("{}.cmd", cmd_name));
+                        if cmd_path.is_file() {
+                            found = Some(cmd_path.to_string_lossy().to_string());
+                            break;
+                        }
+                        let exe_path = dir.join(format!("{}.exe", cmd_name));
+                        if exe_path.is_file() {
+                            found = Some(exe_path.to_string_lossy().to_string());
+                            break;
+                        }
                     }
-                    let exe_path = dir.join(format!("{}.exe", cmd_name));
-                    if exe_path.is_file() {
-                        found = Some(exe_path.to_string_lossy().to_string());
-                        break;
-                    }
+                    found.unwrap_or_else(|| cmd_name.to_string())
+                } else {
+                    cmd_name.to_string()
                 }
-                found.unwrap_or_else(|| cmd_name.to_string())
             } else {
                 cmd_name.to_string()
-            }
-        } else {
-            cmd_name.to_string()
-        };
+            };
         Command::new(resolved)
     }
     #[cfg(not(windows))]
@@ -191,7 +204,11 @@ fn read_jsonrpc_response(
         }
     }
 
-    anyhow::bail!("Exceeded limit ({} lines) waiting for JSON-RPC response id {:?}", max_lines, expected_id)
+    anyhow::bail!(
+        "Exceeded limit ({} lines) waiting for JSON-RPC response id {:?}",
+        max_lines,
+        expected_id
+    )
 }
 
 fn query_server_tools(server_name: &str, cfg: &McpServerConfig) -> Result<Vec<ChatCompletionTool>> {
@@ -204,11 +221,21 @@ fn query_server_tools(server_name: &str, cfg: &McpServerConfig) -> Result<Vec<Ch
     cmd.stdout(Stdio::piped());
     cmd.stderr(Stdio::null());
 
-    let mut child = cmd.spawn()
-        .with_context(|| format!("Failed to spawn MCP server '{}' ({})", server_name, cfg.command))?;
+    let mut child = cmd.spawn().with_context(|| {
+        format!(
+            "Failed to spawn MCP server '{}' ({})",
+            server_name, cfg.command
+        )
+    })?;
 
-    let mut stdin = child.stdin.take().context("Failed to open stdin for MCP server")?;
-    let stdout = child.stdout.take().context("Failed to open stdout for MCP server")?;
+    let mut stdin = child
+        .stdin
+        .take()
+        .context("Failed to open stdin for MCP server")?;
+    let stdout = child
+        .stdout
+        .take()
+        .context("Failed to open stdout for MCP server")?;
     let mut reader = BufReader::new(stdout);
 
     // 1. Initialize Handshake
@@ -275,7 +302,11 @@ fn query_server_tools(server_name: &str, cfg: &McpServerConfig) -> Result<Vec<Ch
     Ok(tools)
 }
 
-fn call_server_tool(cfg: &McpServerConfig, tool_name: &str, args: serde_json::Value) -> Result<String> {
+fn call_server_tool(
+    cfg: &McpServerConfig,
+    tool_name: &str,
+    args: serde_json::Value,
+) -> Result<String> {
     let mut cmd = prepare_command(&cfg.command);
     cmd.args(&cfg.args);
     for (k, v) in &cfg.env {
@@ -285,11 +316,18 @@ fn call_server_tool(cfg: &McpServerConfig, tool_name: &str, args: serde_json::Va
     cmd.stdout(Stdio::piped());
     cmd.stderr(Stdio::null());
 
-    let mut child = cmd.spawn()
+    let mut child = cmd
+        .spawn()
         .with_context(|| format!("Failed to spawn MCP server ({})", cfg.command))?;
 
-    let mut stdin = child.stdin.take().context("Failed to open stdin for MCP server")?;
-    let stdout = child.stdout.take().context("Failed to open stdout for MCP server")?;
+    let mut stdin = child
+        .stdin
+        .take()
+        .context("Failed to open stdin for MCP server")?;
+    let stdout = child
+        .stdout
+        .take()
+        .context("Failed to open stdout for MCP server")?;
     let mut reader = BufReader::new(stdout);
 
     // Initialize (id: 1)

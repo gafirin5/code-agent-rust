@@ -4,7 +4,10 @@
 
 **Ultra-lightweight AI Coding Agent CLI — Built with Rust**
 
+[![Version](https://img.shields.io/badge/Version-0.3.0-blue)]()
 [![Rust](https://img.shields.io/badge/Built%20with-Rust-orange?logo=rust)](https://www.rust-lang.org/)
+[![Tests](https://img.shields.io/badge/Tests-320%2B%20Passing-success)]()
+[![Clippy](https://img.shields.io/badge/Clippy-0%20Warnings-brightgreen)]()
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Binary Size](https://img.shields.io/badge/Binary-~1.8%20MB-brightgreen)]()
 [![OpenAI Compatible](https://img.shields.io/badge/API-OpenAI%20Compatible-412991?logo=openai)]()
@@ -43,6 +46,14 @@ Biner hanya **~1.8 MB** dengan penggunaan RAM yang minimal.
 | 🔌 Multi-Provider | Support OpenAI, DeepSeek, Groq, OpenRouter, dll. |
 | 👤 User Profile | Personalisasi nama, tech stack, bahasa respons |
 | 📦 Biner Kecil | ~2.0 MB, LTO optimized, siap jalan tanpa install |
+
+### 📚 Dokumentasi Lengkap
+Pelajari dokumentasi teknis dan panduan operasional di folder [`docs/`](../docs/README.md):
+- 📝 [**Catatan Update & Changelog**](../docs/UPDATE_NOTES.md)
+- ⚙️ [**Panduan Konfigurasi**](../docs/CONFIGURATION.md)
+- 🏗️ [**Arsitektur Sistem & Concurrency**](../docs/ARCHITECTURE.md)
+- 🤖 [**Buku Panduan AI Agent**](../docs/AI_AGENT_GUIDE.md)
+- 🛠️ [**Referensi Tool Lengkap**](../docs/TOOLS_REFERENCE.md)
 
 ### 🎯 Skill yang Tersedia
 

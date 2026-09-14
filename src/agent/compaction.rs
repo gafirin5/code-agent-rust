@@ -1,7 +1,7 @@
-use anyhow::Result;
-use serde_json::json;
 use crate::agent::provider::ApiProtocol;
 use crate::types::{ChatMessage, MessageRole};
+use anyhow::Result;
+use serde_json::json;
 
 /// Estimates token count based on standard ~3.8 chars per token approximation.
 pub fn estimate_tokens(messages: &[ChatMessage]) -> u64 {
@@ -86,7 +86,10 @@ fn compact_conversation(
     }
 
     // Keep System prompt at index 0 (if present)
-    let has_system = conversation.first().map(|m| m.role == MessageRole::System).unwrap_or(false);
+    let has_system = conversation
+        .first()
+        .map(|m| m.role == MessageRole::System)
+        .unwrap_or(false);
     let start_compact_idx = if has_system { 1 } else { 0 };
 
     // Safe turn-boundary alignment: Never split Assistant tool_calls from their Tool responses,
@@ -98,13 +101,15 @@ fn compact_conversation(
         return Ok(());
     }
 
-    let slice_to_compact: Vec<ChatMessage> = conversation[start_compact_idx..end_compact_idx].to_vec();
+    let slice_to_compact: Vec<ChatMessage> =
+        conversation[start_compact_idx..end_compact_idx].to_vec();
 
     // Generate summary via LLM or fallback
-    let summary_text = match summarize_with_llm(&slice_to_compact, model, api_key, base_url, protocol) {
-        Ok(s) => s,
-        Err(_) => heuristic_summarize(&slice_to_compact),
-    };
+    let summary_text =
+        match summarize_with_llm(&slice_to_compact, model, api_key, base_url, protocol) {
+            Ok(s) => s,
+            Err(_) => heuristic_summarize(&slice_to_compact),
+        };
 
     let summary_msg = ChatMessage::user(format!(
         "[System Notice: Context Compaction]\n\
@@ -194,6 +199,75 @@ fn summarize_with_llm(
         anyhow::bail!("No text content in Anthropic summary response");
     }
 
+    if protocol == ApiProtocol::Gemini {
+        let clean_model = model.strip_prefix("models/").unwrap_or(model);
+        let base = base_url.trim_end_matches('/');
+        let base = if base.contains("/v1beta") {
+            base.to_string()
+        } else {
+            format!("{}/v1beta", base)
+        };
+        let endpoint = format!("{}/models/{}:generateContent", base, clean_model);
+        let body = json!({
+            "contents": [{
+                "parts": [{ "text": prompt }]
+            }],
+            "generationConfig": {
+                "maxOutputTokens": 400
+            }
+        });
+        let mut req = ureq::post(&endpoint)
+            .set("Content-Type", "application/json")
+            .timeout(std::time::Duration::from_secs(30));
+        if !api_key.is_empty() && api_key != "none" {
+            req = req.set("x-goog-api-key", api_key);
+        }
+        let resp = req.send_json(body)?;
+        let raw: String = resp.into_string()?;
+        let val: serde_json::Value = serde_json::from_str(&raw)?;
+        if let Some(txt) = val["candidates"][0]["content"]["parts"][0]["text"].as_str() {
+            return Ok(txt.trim().to_string());
+        }
+        anyhow::bail!("No text content in Gemini summary response");
+    }
+
+    if protocol == ApiProtocol::Ollama {
+        let base = base_url.trim_end_matches('/');
+        let base = if base.ends_with("/v1") {
+            base.trim_end_matches("/v1")
+        } else {
+            base
+        };
+        let endpoint = format!("{}/api/chat", base);
+        let body = json!({
+            "model": model,
+            "messages": [
+                {
+                    "role": "system",
+                    "content": "You are a technical conversation compactor. Summarize key context concisely."
+                },
+                {
+                    "role": "user",
+                    "content": prompt
+                }
+            ],
+            "stream": false
+        });
+        let mut req = ureq::post(&endpoint)
+            .set("Content-Type", "application/json")
+            .timeout(std::time::Duration::from_secs(30));
+        if !api_key.is_empty() && api_key != "none" && api_key != "ollama" {
+            req = req.set("Authorization", &format!("Bearer {}", api_key));
+        }
+        let resp = req.send_json(body)?;
+        let raw: String = resp.into_string()?;
+        let val: serde_json::Value = serde_json::from_str(&raw)?;
+        if let Some(txt) = val["message"]["content"].as_str() {
+            return Ok(txt.trim().to_string());
+        }
+        anyhow::bail!("No text content in Ollama summary response");
+    }
+
     let base = base_url.trim_end_matches('/');
     let endpoint = if base.ends_with("/v1") || base.ends_with("/api") {
         format!("{}/chat/completions", base)
@@ -202,7 +276,9 @@ fn summarize_with_llm(
     };
 
     let messages = vec![
-        ChatMessage::system("You are a technical conversation compactor. Summarize key context concisely."),
+        ChatMessage::system(
+            "You are a technical conversation compactor. Summarize key context concisely.",
+        ),
         ChatMessage::user(prompt),
     ];
 
@@ -261,17 +337,34 @@ fn heuristic_summarize(slice: &[ChatMessage]) -> String {
          • Files involved: {}\n\
          • Actions: Autonomous exploration and tool executions completed.",
         slice.len(),
-        if user_requests.is_empty() { "None recorded".to_string() } else { user_requests.join("; ") },
-        if files_touched.is_empty() { "None".to_string() } else { files_touched.join(", ") }
+        if user_requests.is_empty() {
+            "None recorded".to_string()
+        } else {
+            user_requests.join("; ")
+        },
+        if files_touched.is_empty() {
+            "None".to_string()
+        } else {
+            files_touched.join(", ")
+        }
     )
 }
 
-fn find_safe_compact_cut_point(conversation: &[ChatMessage], desired_end: usize, start_idx: usize) -> usize {
+fn find_safe_compact_cut_point(
+    conversation: &[ChatMessage],
+    desired_end: usize,
+    start_idx: usize,
+) -> usize {
     let mut cut = desired_end.min(conversation.len());
 
     // 1. Never cut in the middle of a tool call / response block:
     // Step backward if cut points directly to a Tool message
-    while cut > start_idx && conversation.get(cut).map(|m| m.role == MessageRole::Tool).unwrap_or(false) {
+    while cut > start_idx
+        && conversation
+            .get(cut)
+            .map(|m| m.role == MessageRole::Tool)
+            .unwrap_or(false)
+    {
         cut -= 1;
     }
 
@@ -280,7 +373,13 @@ fn find_safe_compact_cut_point(conversation: &[ChatMessage], desired_end: usize,
     // so step before the assistant as well.
     if cut > start_idx {
         if let Some(prev) = conversation.get(cut - 1) {
-            if prev.role == MessageRole::Assistant && prev.tool_calls.as_ref().map(|tc| !tc.is_empty()).unwrap_or(false) {
+            if prev.role == MessageRole::Assistant
+                && prev
+                    .tool_calls
+                    .as_ref()
+                    .map(|tc| !tc.is_empty())
+                    .unwrap_or(false)
+            {
                 cut -= 1;
             }
         }
@@ -296,7 +395,12 @@ fn find_safe_compact_cut_point(conversation: &[ChatMessage], desired_end: usize,
     }
 
     // Fallback: Ensure cut never leaves preserved_tail starting with Tool
-    while cut > start_idx && conversation.get(cut).map(|m| m.role == MessageRole::Tool).unwrap_or(false) {
+    while cut > start_idx
+        && conversation
+            .get(cut)
+            .map(|m| m.role == MessageRole::Tool)
+            .unwrap_or(false)
+    {
         cut -= 1;
     }
 

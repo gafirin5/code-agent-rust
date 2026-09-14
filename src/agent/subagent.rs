@@ -1,8 +1,8 @@
-use anyhow::Result;
-use std::sync::Arc;
 use crate::agent::orchestrator::run_agent_loop;
 use crate::agent::permissions::{PermissionGate, PermissionMode};
 use crate::agent::tasks::{CancellationToken, OutputSink, TaskLogBuffer, TaskManager};
+use anyhow::Result;
+use std::sync::Arc;
 
 /// Builds the system prompt for a subagent given a task and skill description.
 fn build_subagent_system_prompt(task: &str, skill_desc: &str) -> String {
@@ -42,11 +42,12 @@ pub fn run_subagent(
     let system_prompt = build_subagent_system_prompt(task, skill_desc);
 
     let mut sub_conversation = Vec::new();
-    let mut permission_gate = PermissionGate {
-        mode: PermissionMode::AutoApprove,
-    };
+    let mut permission_gate = PermissionGate::new(PermissionMode::AutoApprove);
 
-    println!("\n🤖 \x1B[1m[Subagent Delegated]\x1B[0m Starting isolated task: \"{}\" (Model: {})", task, model);
+    println!(
+        "\n🤖 \x1B[1m[Subagent Delegated]\x1B[0m Starting isolated task: \"{}\" (Model: {})",
+        task, model
+    );
 
     let protocol = crate::agent::provider::ApiProtocol::from_str(base_url);
     let result = run_agent_loop(
@@ -65,7 +66,10 @@ pub fn run_subagent(
         None,
     )?;
 
-    println!("✔ \x1B[32m[Subagent Complete]\x1B[0m Finished in {} turns.", sub_conversation.len() / 2);
+    println!(
+        "✔ \x1B[32m[Subagent Complete]\x1B[0m Finished in {} turns.",
+        sub_conversation.len() / 2
+    );
 
     Ok(format!(
         "### Subagent Task Result:\n{}\n\n(Delegated subagent executed {} tool calls)",
@@ -84,6 +88,30 @@ pub fn run_subagent_background(
     base_url: &str,
     parent_model: &str,
 ) -> Result<String> {
+    run_subagent_background_with_dependencies(
+        task,
+        skill,
+        model_override,
+        max_turns,
+        api_key,
+        base_url,
+        parent_model,
+        None,
+    )
+}
+
+/// Spawns an isolated subagent as a background task with optional DAG dependencies.
+#[allow(clippy::too_many_arguments)]
+pub fn run_subagent_background_with_dependencies(
+    task: &str,
+    skill: Option<&str>,
+    model_override: Option<&str>,
+    max_turns: Option<usize>,
+    api_key: &str,
+    base_url: &str,
+    parent_model: &str,
+    dependencies: Option<Vec<String>>,
+) -> Result<String> {
     if api_key.trim().is_empty() || api_key == "your_api_key_here" {
         anyhow::bail!(
             "AI_API_KEY is not set or configured. Subagent delegation requires an active AI provider API key."
@@ -92,7 +120,9 @@ pub fn run_subagent_background(
 
     let model = model_override.unwrap_or(parent_model).to_string();
     let turns = max_turns.unwrap_or(8).clamp(1, 20);
-    let skill_desc = skill.unwrap_or("general technical investigator").to_string();
+    let skill_desc = skill
+        .unwrap_or("general technical investigator")
+        .to_string();
     let system_prompt = build_subagent_system_prompt(task, &skill_desc);
 
     // Clone owned values for the closure (moved into worker thread)
@@ -109,69 +139,77 @@ pub fn run_subagent_background(
     };
 
     let tm = TaskManager::global();
-    let (task_id, _token, _logs) = tm.spawn_task_with_sink(
-        task_name,
-        task_desc,
-        move |cancel_token: CancellationToken, logs: Arc<TaskLogBuffer>| {
-            // Check cancellation before starting
-            cancel_token.check().map_err(|e| anyhow::anyhow!("{}", e))?;
+    let deps = dependencies.unwrap_or_default();
+    let deps_msg = if deps.is_empty() {
+        String::new()
+    } else {
+        format!("\nPrerequisites: {}", deps.join(", "))
+    };
 
-            // Instantiate isolated buffered sink
-            let sink = OutputSink::Buffered(logs);
+    let (task_id, _token, _logs) = tm
+        .spawn_task_with_dependencies_and_sink(
+            task_name,
+            task_desc,
+            deps,
+            move |cancel_token: CancellationToken, logs: Arc<TaskLogBuffer>| {
+                // Check cancellation before starting
+                cancel_token.check().map_err(|e| anyhow::anyhow!("{}", e))?;
 
-            sink.emit(&format!(
-                "🤖 [Subagent Delegated] Starting isolated task: \"{}\" (Model: {})",
-                task_owned, model_owned
-            ));
+                // Instantiate isolated buffered sink
+                let sink = OutputSink::Buffered(logs);
 
-            let mut sub_conversation = Vec::new();
-            let mut permission_gate = PermissionGate {
-                mode: PermissionMode::AutoApprove,
-            };
+                sink.emit(&format!(
+                    "🤖 [Subagent Delegated] Starting isolated task: \"{}\" (Model: {})",
+                    task_owned, model_owned
+                ));
 
-            let protocol = crate::agent::provider::ApiProtocol::from_str(&base_url_owned);
+                let mut sub_conversation = Vec::new();
+                let mut permission_gate = PermissionGate::new(PermissionMode::AutoApprove);
 
-            // Run agent loop with output redirected silently to sink
-            let result = run_agent_loop(
-                &task_owned,
-                &mut sub_conversation,
-                &model_owned,
-                &api_key_owned,
-                &base_url_owned,
-                protocol,
-                &mut permission_gate,
-                &system_prompt,
-                turns,
-                false, // Disable streaming in background mode
-                None,
-                Some(&sink),
-                Some(&cancel_token),
-            )?;
+                let protocol = crate::agent::provider::ApiProtocol::from_str(&base_url_owned);
 
-            sink.emit(&format!(
-                "✔ [Subagent Complete] Finished in {} turns with {} tool executions.",
-                sub_conversation.len() / 2,
-                result.tools_executed
-            ));
+                // Run agent loop with output redirected silently to sink
+                let result = run_agent_loop(
+                    &task_owned,
+                    &mut sub_conversation,
+                    &model_owned,
+                    &api_key_owned,
+                    &base_url_owned,
+                    protocol,
+                    &mut permission_gate,
+                    &system_prompt,
+                    turns,
+                    false, // Disable streaming in background mode
+                    None,
+                    Some(&sink),
+                    Some(&cancel_token),
+                )?;
 
-            // Check cancellation after completion
-            cancel_token.check().map_err(|e| anyhow::anyhow!("{}", e))?;
+                sink.emit(&format!(
+                    "✔ [Subagent Complete] Finished in {} turns with {} tool executions.",
+                    sub_conversation.len() / 2,
+                    result.tools_executed
+                ));
 
-            Ok(format!(
-                "### Subagent Task Result:\n{}\n\n(Delegated subagent executed {} tool calls)",
-                result.final_content, result.tools_executed
-            ))
-        },
-    ).map_err(|e| anyhow::anyhow!("Failed to spawn background subagent: {}", e))?;
+                // Check cancellation after completion
+                cancel_token.check().map_err(|e| anyhow::anyhow!("{}", e))?;
+
+                Ok(format!(
+                    "### Subagent Task Result:\n{}\n\n(Delegated subagent executed {} tool calls)",
+                    result.final_content, result.tools_executed
+                ))
+            },
+        )
+        .map_err(|e| anyhow::anyhow!("Failed to spawn background subagent: {}", e))?;
 
     Ok(format!(
         "Background subagent launched successfully.\n\
          Task ID: {}\n\
          Model: {}\n\
-         Skill: {}\n\n\
+         Skill: {}{}\n\n\
          Use /tasks logs {} to inspect background logs.\n\
          Use manage_task(action=\"status\", task_id=\"{}\") to check progress.\n\
          Use manage_task(action=\"await\", task_id=\"{}\") to wait for results.",
-        task_id, model, skill_desc, task_id, task_id, task_id
+        task_id, model, skill_desc, deps_msg, task_id, task_id, task_id
     ))
 }

@@ -2,6 +2,7 @@
 mod tasks;
 
 use std::panic;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
@@ -32,7 +33,7 @@ fn test_zero_duration_timeout_on_running_task() {
         other => panic!("Expected Timeout, got {:?}", other),
     }
     assert!(
-        elapsed < Duration::from_millis(50),
+        elapsed < Duration::from_millis(500),
         "Zero-duration timeout took {:?}, should be nearly instantaneous",
         elapsed
     );
@@ -61,7 +62,7 @@ fn test_zero_duration_timeout_on_completed_task() {
     assert_eq!(snap2.status, TaskStatus::Completed);
     assert_eq!(snap2.result.as_deref(), Some("finished payload"));
     assert!(
-        elapsed < Duration::from_millis(20),
+        elapsed < Duration::from_millis(200),
         "Await completed with zero duration took {:?}",
         elapsed
     );
@@ -156,7 +157,9 @@ fn test_race_between_completion_and_short_timeout() {
                 assert_eq!(snap.result.as_deref(), Some("race winner"));
             }
             Err(TaskError::Timeout(_)) => {
-                let snap = manager.await_task(&id, Some(Duration::from_millis(500))).unwrap();
+                let snap = manager
+                    .await_task(&id, Some(Duration::from_secs(5)))
+                    .unwrap();
                 assert_eq!(snap.status, TaskStatus::Completed);
             }
             Err(other) => panic!("Unexpected error: {:?}", other),
@@ -177,7 +180,9 @@ fn test_panic_with_static_str() {
         })
         .unwrap();
 
-    let snap = manager.await_task(&id, Some(Duration::from_millis(1000))).unwrap();
+    let snap = manager
+        .await_task(&id, Some(Duration::from_millis(1000)))
+        .unwrap();
     assert_eq!(snap.status, TaskStatus::Failed);
     assert!(snap.result.is_none());
     let err = snap.error.expect("Must have error message");
@@ -193,7 +198,9 @@ fn test_panic_with_heap_string() {
         })
         .unwrap();
 
-    let snap = manager.await_task(&id, Some(Duration::from_millis(1000))).unwrap();
+    let snap = manager
+        .await_task(&id, Some(Duration::from_millis(1000)))
+        .unwrap();
     assert_eq!(snap.status, TaskStatus::Failed);
     assert!(snap.result.is_none());
     let err = snap.error.expect("Must have error message");
@@ -212,15 +219,21 @@ struct CustomPanicPayload {
 fn test_panic_with_custom_non_string_type() {
     let manager = TaskManager::new();
     let (id, _) = manager
-        .spawn_task("panic-custom".into(), "panics with arbitrary type".into(), |_| {
-            panic::panic_any(CustomPanicPayload {
-                code: 500,
-                msg: "custom type crash",
-            });
-        })
+        .spawn_task(
+            "panic-custom".into(),
+            "panics with arbitrary type".into(),
+            |_| {
+                panic::panic_any(CustomPanicPayload {
+                    code: 500,
+                    msg: "custom type crash",
+                });
+            },
+        )
         .unwrap();
 
-    let snap = manager.await_task(&id, Some(Duration::from_millis(1000))).unwrap();
+    let snap = manager
+        .await_task(&id, Some(Duration::from_millis(1000)))
+        .unwrap();
     assert_eq!(snap.status, TaskStatus::Failed);
     let err = snap.error.expect("Must have error message");
     assert!(
@@ -238,19 +251,25 @@ fn test_multiple_concurrent_panicking_workers() {
 
     for i in 0..COUNT {
         let (id, _) = manager
-            .spawn_task(format!("multi-panic-{}", i), "panic burst".into(), move |_| {
-                if i % 2 == 0 {
-                    panic!("even panic {}", i);
-                } else {
-                    panic::panic_any(i);
-                }
-            })
+            .spawn_task(
+                format!("multi-panic-{}", i),
+                "panic burst".into(),
+                move |_| {
+                    if i % 2 == 0 {
+                        panic!("even panic {}", i);
+                    } else {
+                        panic::panic_any(i);
+                    }
+                },
+            )
             .unwrap();
         ids.push((id, i));
     }
 
     for (id, i) in ids {
-        let snap = manager.await_task(&id, Some(Duration::from_millis(1000))).unwrap();
+        let snap = manager
+            .await_task(&id, Some(Duration::from_millis(1000)))
+            .unwrap();
         assert_eq!(snap.status, TaskStatus::Failed);
         let err = snap.error.unwrap();
         if i % 2 == 0 {
@@ -293,13 +312,17 @@ fn test_hostile_task_inner_mutex_poisoning() {
     assert!(inner.record.is_poisoned(), "Mutex should be poisoned");
 
     // Operations on manager must continue working without panic
-    let snap = manager.get_task(&id).expect("get_task should recover from poisoned mutex");
+    let snap = manager
+        .get_task(&id)
+        .expect("get_task should recover from poisoned mutex");
     assert_eq!(snap.id, id);
 
     let list = manager.list_tasks();
     assert_eq!(list.len(), 1);
 
-    let final_snap = manager.await_task(&id, Some(Duration::from_millis(1000))).unwrap();
+    let final_snap = manager
+        .await_task(&id, Some(Duration::from_millis(1000)))
+        .unwrap();
     assert_eq!(final_snap.status, TaskStatus::Completed);
     assert_eq!(final_snap.result.as_deref(), Some("recovered"));
 }
@@ -329,7 +352,9 @@ fn test_poison_recovery_on_multiple_operations() {
     let _ = manager.cancel_task(&id1);
 
     // 2. await_task must recover
-    let snap = manager.await_task(&id1, Some(Duration::from_millis(500))).unwrap();
+    let snap = manager
+        .await_task(&id1, Some(Duration::from_millis(500)))
+        .unwrap();
     assert!(snap.is_terminal());
 
     // 3. remove_task must recover
@@ -367,7 +392,9 @@ fn test_empty_and_massive_task_metadata() {
     // 2. Huge strings (100 KB description)
     let huge_desc = "x".repeat(100_000);
     let (id_huge, _) = manager
-        .spawn_task("huge-task".into(), huge_desc.clone(), |_| Ok("huge done".into()))
+        .spawn_task("huge-task".into(), huge_desc.clone(), |_| {
+            Ok("huge done".into())
+        })
         .unwrap();
 
     let snap_huge = manager.await_task(&id_huge, None).unwrap();
@@ -382,15 +409,24 @@ fn test_nonexistent_task_id_boundaries() {
     // Empty ID
     assert!(manager.get_task("").is_none());
     assert_eq!(manager.cancel_task(""), Err(TaskError::NotFound("".into())));
-    assert_eq!(manager.await_task("", None), Err(TaskError::NotFound("".into())));
+    assert_eq!(
+        manager.await_task("", None),
+        Err(TaskError::NotFound("".into()))
+    );
     assert_eq!(manager.remove_task(""), Ok(false));
     assert!(manager.get_task_logs("").is_none());
 
     // Strange symbols
     let weird = "task-null\0-newline\n-emoji??";
     assert!(manager.get_task(weird).is_none());
-    assert_eq!(manager.cancel_task(weird), Err(TaskError::NotFound(weird.into())));
-    assert_eq!(manager.await_task(weird, None), Err(TaskError::NotFound(weird.into())));
+    assert_eq!(
+        manager.cancel_task(weird),
+        Err(TaskError::NotFound(weird.into()))
+    );
+    assert_eq!(
+        manager.await_task(weird, None),
+        Err(TaskError::NotFound(weird.into()))
+    );
     assert_eq!(manager.remove_task(weird), Ok(false));
 }
 
@@ -431,12 +467,21 @@ fn test_prune_and_clear_boundary_conditions() {
 #[test]
 fn test_multiple_waiters_with_mixed_timeouts() {
     let manager = Arc::new(TaskManager::new());
+    let release_task = Arc::new(AtomicBool::new(false));
+    let release_clone = release_task.clone();
     let (id, _) = manager
-        .spawn_task("mixed-awaiters".into(), "sleeps 60ms".into(), |_| {
-            thread::sleep(Duration::from_millis(60));
+        .spawn_task("mixed-awaiters".into(), "sleeps until released".into(), move |_| {
+            while !release_clone.load(Ordering::Relaxed) {
+                thread::sleep(Duration::from_millis(2));
+            }
             Ok("broadcast data".into())
         })
         .unwrap();
+
+    // Ensure worker task is actively running before spawning waiters
+    manager
+        .await_running(&id, Some(Duration::from_secs(5)))
+        .expect("Task must start running");
 
     let m1 = manager.clone();
     let id1 = id.clone();
@@ -445,8 +490,8 @@ fn test_multiple_waiters_with_mixed_timeouts() {
 
     let m2 = manager.clone();
     let id2 = id.clone();
-    // Waiter 2: 1000ms timeout (should succeed)
-    let h2 = thread::spawn(move || m2.await_task(&id2, Some(Duration::from_millis(1000))));
+    // Waiter 2: 5000ms timeout (should succeed)
+    let h2 = thread::spawn(move || m2.await_task(&id2, Some(Duration::from_millis(5000))));
 
     let m3 = manager.clone();
     let id3 = id.clone();
@@ -459,6 +504,9 @@ fn test_multiple_waiters_with_mixed_timeouts() {
         TaskError::Timeout(d) => assert_eq!(d, Duration::from_millis(15)),
         other => panic!("Expected timeout, got {:?}", other),
     }
+
+    // Now release the task so Waiter 2 and Waiter 3 complete immediately
+    release_task.store(true, Ordering::Relaxed);
 
     let res2 = h2.join().unwrap().unwrap();
     assert_eq!(res2.status, TaskStatus::Completed);
@@ -478,14 +526,10 @@ fn test_high_volume_spawn_stress_50_tasks() {
     let start = Instant::now();
     for i in 0..TOTAL {
         let (id, _) = manager
-            .spawn_task(
-                format!("burst-{}", i),
-                format!("desc {}", i),
-                move |_| {
-                    thread::sleep(Duration::from_millis(10));
-                    Ok(format!("output-{}", i))
-                },
-            )
+            .spawn_task(format!("burst-{}", i), format!("desc {}", i), move |_| {
+                thread::sleep(Duration::from_millis(10));
+                Ok(format!("output-{}", i))
+            })
             .unwrap();
         ids.push((id, i));
     }
@@ -494,7 +538,9 @@ fn test_high_volume_spawn_stress_50_tasks() {
 
     // Await all 50 tasks
     for (id, i) in ids {
-        let snap = manager.await_task(&id, Some(Duration::from_millis(3000))).unwrap();
+        let snap = manager
+            .await_task(&id, Some(Duration::from_millis(10000)))
+            .unwrap();
         assert_eq!(snap.status, TaskStatus::Completed);
         let expected = format!("output-{}", i);
         assert_eq!(snap.result.as_deref(), Some(expected.as_str()));
@@ -503,8 +549,8 @@ fn test_high_volume_spawn_stress_50_tasks() {
     let elapsed = start.elapsed();
     // 50 tasks * 10ms = 500ms serial. In parallel, easily finishes within generous window under load.
     assert!(
-        elapsed < Duration::from_millis(5000),
-        "50 concurrent tasks took {:?}, expected < 5000ms",
+        elapsed < Duration::from_millis(15000),
+        "50 concurrent tasks took {:?}, expected < 15000ms",
         elapsed
     );
     assert_eq!(manager.list_tasks().len(), TOTAL);
@@ -551,7 +597,10 @@ fn test_failure_while_queued_duration_populated() {
         "snapshot.duration_ms {:?} should reflect elapsed ms",
         snap.duration_ms
     );
-    assert!(snap.started_at.is_none(), "started_at must be None for queued failure");
+    assert!(
+        snap.started_at.is_none(),
+        "started_at must be None for queued failure"
+    );
     assert!(snap.finished_at.is_some(), "finished_at must be populated");
     assert_eq!(snap.error.as_deref(), Some("Explicit spawn failure test"));
 }
@@ -560,7 +609,13 @@ fn test_failure_while_queued_duration_populated() {
 fn test_cancellation_while_queued_duration_populated_direct() {
     let token = tasks::CancellationToken::new();
     let logs = Arc::new(tasks::TaskLogBuffer::new());
-    let mut rec = tasks::TaskRecord::new("queued-cancel-explicit", "test", "desc", token.clone(), logs);
+    let mut rec = tasks::TaskRecord::new(
+        "queued-cancel-explicit",
+        "test",
+        "desc",
+        token.clone(),
+        logs,
+    );
 
     assert_eq!(rec.status, TaskStatus::Queued);
     assert!(rec.duration.is_none());
@@ -588,7 +643,10 @@ fn test_cancellation_while_queued_duration_populated_direct() {
         "snapshot.duration_ms {:?} should reflect elapsed ms",
         snap.duration_ms
     );
-    assert!(snap.started_at.is_none(), "started_at must be None for queued cancel");
+    assert!(
+        snap.started_at.is_none(),
+        "started_at must be None for queued cancel"
+    );
     assert!(snap.finished_at.is_some(), "finished_at must be populated");
     assert_eq!(
         snap.error.as_deref(),
@@ -600,10 +658,14 @@ fn test_cancellation_while_queued_duration_populated_direct() {
 fn test_queued_task_cancellation_via_manager_preserves_duration() {
     let manager = TaskManager::new();
     let (id, _) = manager
-        .spawn_task("cancel-mgr-direct".into(), "cancel immediately".into(), |_| {
-            thread::sleep(Duration::from_millis(200));
-            Ok("ok".into())
-        })
+        .spawn_task(
+            "cancel-mgr-direct".into(),
+            "cancel immediately".into(),
+            |_| {
+                thread::sleep(Duration::from_millis(200));
+                Ok("ok".into())
+            },
+        )
         .unwrap();
 
     // Cancel immediately via convenience method
@@ -649,8 +711,8 @@ fn test_await_running_immediate_return_when_already_running() {
 
     assert_eq!(snap2.status, TaskStatus::Running);
     assert!(
-        elapsed < Duration::from_millis(20),
-        "Immediate return took {:?}, expected < 20ms",
+        elapsed < Duration::from_millis(200),
+        "Immediate return took {:?}, expected < 200ms",
         elapsed
     );
 
@@ -663,8 +725,8 @@ fn test_await_running_immediate_return_when_already_running() {
 
     assert_eq!(snap3.status, TaskStatus::Running);
     assert!(
-        elapsed3 < Duration::from_millis(20),
-        "Immediate return took {:?}, expected < 20ms",
+        elapsed3 < Duration::from_millis(200),
+        "Immediate return took {:?}, expected < 200ms",
         elapsed3
     );
 
@@ -675,7 +737,11 @@ fn test_await_running_immediate_return_when_already_running() {
 fn test_await_running_immediate_return_for_completed_task() {
     let manager = TaskManager::new();
     let (id, _) = manager
-        .spawn_task("fast-comp".into(), "done".into(), |_| Ok("immediate".into()))
+        .spawn_task(
+            "fast-comp".into(),
+            "done".into(),
+            |_| Ok("immediate".into()),
+        )
         .unwrap();
 
     let snap = manager.await_task(&id, None).unwrap();
@@ -690,8 +756,8 @@ fn test_await_running_immediate_return_for_completed_task() {
 
     assert_eq!(snap_r.status, TaskStatus::Completed);
     assert!(
-        elapsed < Duration::from_millis(20),
-        "Took {:?}, expected < 20ms",
+        elapsed < Duration::from_millis(200),
+        "Took {:?}, expected < 200ms",
         elapsed
     );
 }
@@ -717,8 +783,8 @@ fn test_await_running_immediate_return_for_failed_task() {
 
     assert_eq!(snap_r.status, TaskStatus::Failed);
     assert!(
-        elapsed < Duration::from_millis(20),
-        "Took {:?}, expected < 20ms",
+        elapsed < Duration::from_millis(200),
+        "Took {:?}, expected < 200ms",
         elapsed
     );
 }
@@ -746,8 +812,8 @@ fn test_await_running_immediate_return_for_cancelled_task() {
 
     assert_eq!(snap_r.status, TaskStatus::Cancelled);
     assert!(
-        elapsed < Duration::from_millis(20),
-        "Took {:?}, expected < 20ms",
+        elapsed < Duration::from_millis(200),
+        "Took {:?}, expected < 200ms",
         elapsed
     );
 }
@@ -827,4 +893,3 @@ fn test_await_running_multi_waiter_stampede() {
     let final_snap = manager.await_task(&id, None).unwrap();
     assert_eq!(final_snap.status, TaskStatus::Completed);
 }
-

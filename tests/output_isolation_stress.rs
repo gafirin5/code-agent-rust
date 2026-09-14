@@ -253,7 +253,9 @@ fn test_log_retention_cooperative_cancellation_mid_turn() {
         .unwrap();
 
     // Ensure task has started running and logged its pre-cancel progress
-    let _ = manager.await_running(&id, Some(Duration::from_secs(5))).unwrap();
+    let _ = manager
+        .await_running(&id, Some(Duration::from_secs(5)))
+        .unwrap();
     let deadline = Instant::now() + Duration::from_secs(5);
     while !started_logging.load(Ordering::SeqCst) && Instant::now() < deadline {
         thread::sleep(Duration::from_millis(5));
@@ -261,7 +263,9 @@ fn test_log_retention_cooperative_cancellation_mid_turn() {
 
     assert!(manager.cancel_task(&id).is_ok());
 
-    let snap = manager.await_task(&id, Some(Duration::from_secs(5))).unwrap();
+    let snap = manager
+        .await_task(&id, Some(Duration::from_secs(5)))
+        .unwrap();
     assert_eq!(snap.status, TaskStatus::Cancelled);
 
     // Verify all logs including the shutdown log are preserved in log buffer
@@ -301,7 +305,10 @@ fn test_log_retention_panicking_worker_resilience() {
     let queried = manager.get_task_logs(&id).expect("Logs must be retrieved");
     assert_eq!(queried.len(), LOGS_BEFORE_PANIC);
     assert_eq!(queried[0], "Pre-panic step 0");
-    assert_eq!(queried[LOGS_BEFORE_PANIC - 1], format!("Pre-panic step {}", LOGS_BEFORE_PANIC - 1));
+    assert_eq!(
+        queried[LOGS_BEFORE_PANIC - 1],
+        format!("Pre-panic step {}", LOGS_BEFORE_PANIC - 1)
+    );
 }
 
 // ============================================================================
@@ -328,7 +335,10 @@ fn test_massive_log_lines_stress_100k() {
     assert_eq!(tail_50.len(), 50);
     assert_eq!(
         tail_50.last().unwrap(),
-        &format!("Log line sequence index {:06} [payload data]", TOTAL_LINES - 1)
+        &format!(
+            "Log line sequence index {:06} [payload data]",
+            TOTAL_LINES - 1
+        )
     );
 
     // Paginated slice inspection
@@ -337,7 +347,10 @@ fn test_massive_log_lines_stress_100k() {
 
     // Boundary conditions
     assert_eq!(buffer.get_lines(TOTAL_LINES, 10), Vec::<String>::new());
-    assert_eq!(buffer.get_lines(TOTAL_LINES + 500, 10), Vec::<String>::new());
+    assert_eq!(
+        buffer.get_lines(TOTAL_LINES + 500, 10),
+        Vec::<String>::new()
+    );
     assert_eq!(buffer.get_lines(0, 0), Vec::<String>::new());
 
     // Overflow protection: offset + limit exceeding total
@@ -445,7 +458,7 @@ fn test_high_contention_concurrent_log_buffer_stress() {
     assert_eq!(all.len(), EXPECTED_TOTAL);
 
     // Verify all writers' lines are present
-    let mut counts_per_writer = vec![0; WRITERS];
+    let mut counts_per_writer = [0; WRITERS];
     for line in all {
         if line.starts_with("writer-") {
             let writer_id: usize = line[7..9].parse().unwrap();
@@ -468,9 +481,11 @@ fn test_notification_formatting_tty_and_plain_text() {
 
     // 1. Completed task
     let (c_id, _tok, _) = manager
-        .spawn_task_with_sink("comp-task".into(), "completed description".into(), |_tok, _logs| {
-            Ok("result".into())
-        })
+        .spawn_task_with_sink(
+            "comp-task".into(),
+            "completed description".into(),
+            |_tok, _logs| Ok("result".into()),
+        )
         .unwrap();
     let comp_snap = manager.await_task(&c_id, None).unwrap();
 
@@ -481,14 +496,22 @@ fn test_notification_formatting_tty_and_plain_text() {
 
     let plain_comp = comp_snap.format_notification(false);
     assert!(plain_comp.contains("[COMPLETED]"));
-    assert!(!plain_comp.contains("\x1B"), "Plain notification must contain ZERO ANSI escape codes!");
-    assert!(!plain_comp.contains("\r"), "Plain notification must contain ZERO carriage returns!");
+    assert!(
+        !plain_comp.contains("\x1B"),
+        "Plain notification must contain ZERO ANSI escape codes!"
+    );
+    assert!(
+        !plain_comp.contains("\r"),
+        "Plain notification must contain ZERO carriage returns!"
+    );
 
     // 2. Failed task
     let (f_id, _tok, _) = manager
-        .spawn_task_with_sink("fail-task".into(), "failed description".into(), |_tok, _logs| {
-            Err(anyhow!("bad error"))
-        })
+        .spawn_task_with_sink(
+            "fail-task".into(),
+            "failed description".into(),
+            |_tok, _logs| Err(anyhow!("bad error")),
+        )
         .unwrap();
     let fail_snap = manager.await_task(&f_id, None).unwrap();
 
@@ -503,12 +526,16 @@ fn test_notification_formatting_tty_and_plain_text() {
 
     // 3. Cancelled task
     let (cn_id, _tok, _) = manager
-        .spawn_task_with_sink("canc-task".into(), "cancelled description".into(), |token, _logs| {
-            while !token.is_cancelled() {
-                thread::sleep(Duration::from_millis(5));
-            }
-            Err(anyhow!("cancelled"))
-        })
+        .spawn_task_with_sink(
+            "canc-task".into(),
+            "cancelled description".into(),
+            |token, _logs| {
+                while !token.is_cancelled() {
+                    thread::sleep(Duration::from_millis(5));
+                }
+                Err(anyhow!("cancelled"))
+            },
+        )
         .unwrap();
     manager.cancel_task(&cn_id).unwrap();
     let canc_snap = manager.await_task(&cn_id, None).unwrap();
@@ -546,7 +573,9 @@ fn test_atomic_drain_deduplication_under_high_concurrency() {
 
     // Await all tasks to terminal state
     for id in &task_ids {
-        let snap = manager.await_task(id, Some(Duration::from_secs(5))).unwrap();
+        let snap = manager
+            .await_task(id, Some(Duration::from_secs(5)))
+            .unwrap();
         assert!(snap.status.is_terminal());
     }
 

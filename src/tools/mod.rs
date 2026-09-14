@@ -6,13 +6,13 @@ pub mod search;
 pub mod self_heal;
 pub mod shell;
 pub mod skills;
-pub mod web;
 #[cfg(test)]
 mod tests;
+pub mod web;
 
+use crate::types::{ChatCompletionTool, FunctionDefinition};
 use anyhow::{Context, Result};
 use serde_json::json;
-use crate::types::{ChatCompletionTool, FunctionDefinition};
 
 pub fn is_mutating_tool(name: &str) -> bool {
     matches!(name, "write_file" | "edit_file" | "shell")
@@ -354,6 +354,11 @@ pub fn get_available_tools() -> Vec<ChatCompletionTool> {
                         "background": {
                             "type": "boolean",
                             "description": "If true, run the subagent in the background and return a task_id immediately without blocking (default: false)."
+                        },
+                        "dependencies": {
+                            "type": "array",
+                            "items": { "type": "string" },
+                            "description": "Optional list of prerequisite task IDs that must complete before this subagent executes."
                         }
                     },
                     "required": ["task"]
@@ -397,8 +402,12 @@ pub fn get_available_tools() -> Vec<ChatCompletionTool> {
 }
 
 pub fn dispatch_tool(name: &str, arguments_json: &str) -> Result<String> {
-    let args: serde_json::Value = serde_json::from_str(arguments_json)
-        .with_context(|| format!("Invalid JSON arguments for tool '{}': {}", name, arguments_json))?;
+    let args: serde_json::Value = serde_json::from_str(arguments_json).with_context(|| {
+        format!(
+            "Invalid JSON arguments for tool '{}': {}",
+            name, arguments_json
+        )
+    })?;
 
     match name {
         "read_file" => {
@@ -409,19 +418,27 @@ pub fn dispatch_tool(name: &str, arguments_json: &str) -> Result<String> {
         }
         "write_file" => {
             let path = args["path"].as_str().context("Missing 'path' argument")?;
-            let content = args["content"].as_str().context("Missing 'content' argument")?;
+            let content = args["content"]
+                .as_str()
+                .context("Missing 'content' argument")?;
             let overwrite = args["overwrite"].as_bool();
             filesystem::write_file(path, content, overwrite)
         }
         "edit_file" => {
             let path = args["path"].as_str().context("Missing 'path' argument")?;
-            let target = args["target_content"].as_str().context("Missing 'target_content' argument")?;
-            let replacement = args["replacement_content"].as_str().context("Missing 'replacement_content' argument")?;
+            let target = args["target_content"]
+                .as_str()
+                .context("Missing 'target_content' argument")?;
+            let replacement = args["replacement_content"]
+                .as_str()
+                .context("Missing 'replacement_content' argument")?;
             let allow_multiple = args["allow_multiple"].as_bool();
             filesystem::edit_file(path, target, replacement, allow_multiple)
         }
         "glob_files" => {
-            let pattern = args["pattern"].as_str().context("Missing 'pattern' argument")?;
+            let pattern = args["pattern"]
+                .as_str()
+                .context("Missing 'pattern' argument")?;
             let path = args["path"].as_str();
             let mode = args["mode"].as_str();
             search::glob_files(pattern, path, mode)
@@ -437,20 +454,31 @@ pub fn dispatch_tool(name: &str, arguments_json: &str) -> Result<String> {
             search::grep_files(query, path, include, ci, limit, offset, ctx)
         }
         "shell" => {
-            let cmd = args["command"].as_str().context("Missing 'command' argument")?;
+            let cmd = args["command"]
+                .as_str()
+                .context("Missing 'command' argument")?;
             let timeout = args["timeout_secs"].as_u64();
             shell::execute_shell(cmd, timeout)
         }
         "read_tool_result" => {
-            let id = args["result_id"].as_str().context("Missing 'result_id' argument")?;
-            let offset = args["offset"].as_u64().context("Missing 'offset' argument")? as usize;
+            let id = args["result_id"]
+                .as_str()
+                .context("Missing 'result_id' argument")?;
+            let offset = args["offset"]
+                .as_u64()
+                .context("Missing 'offset' argument")? as usize;
             let limit = args["limit"].as_u64().context("Missing 'limit' argument")? as usize;
-            result_store::ResultStore::read_result(id, offset, limit).map_err(|e| anyhow::anyhow!(e))
+            result_store::ResultStore::read_result(id, offset, limit)
+                .map_err(|e| anyhow::anyhow!(e))
         }
         "ask_user_question" => {
-            let question = args["question"].as_str().context("Missing 'question' argument")?;
+            let question = args["question"]
+                .as_str()
+                .context("Missing 'question' argument")?;
             let options = args["options"].as_array().map(|arr| {
-                arr.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect()
+                arr.iter()
+                    .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                    .collect()
             });
             interaction::ask_user_question(question, options)
         }
@@ -459,7 +487,9 @@ pub fn dispatch_tool(name: &str, arguments_json: &str) -> Result<String> {
             skills::load_skill_content(name)
         }
         "manage_memory" => {
-            let action = args["action"].as_str().context("Missing 'action' argument")?;
+            let action = args["action"]
+                .as_str()
+                .context("Missing 'action' argument")?;
             let content = args["content"].as_str().unwrap_or("");
             crate::agent::memory::MemoryManager::save_long_term_memory(action, content)
         }
@@ -482,17 +512,43 @@ pub fn dispatch_tool(name: &str, arguments_json: &str) -> Result<String> {
             let model = args["model"].as_str();
             let max_turns = args["max_turns"].as_u64().map(|n| n as usize);
             let background = args["background"].as_bool().unwrap_or(false);
+            let dependencies: Option<Vec<String>> = args["dependencies"].as_array().map(|arr| {
+                arr.iter()
+                    .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                    .collect()
+            });
             let api_key = std::env::var("AI_API_KEY").unwrap_or_default();
-            let base_url = std::env::var("AI_BASE_URL").unwrap_or_else(|_| "https://api.openai.com/v1".to_string());
-            let default_model = std::env::var("AI_MODEL").unwrap_or_else(|_| "gpt-4o-mini".to_string());
+            let base_url = std::env::var("AI_BASE_URL")
+                .unwrap_or_else(|_| "https://api.openai.com/v1".to_string());
+            let default_model =
+                std::env::var("AI_MODEL").unwrap_or_else(|_| "gpt-4o-mini".to_string());
             if background {
-                crate::agent::subagent::run_subagent_background(task, skill, model, max_turns, &api_key, &base_url, &default_model)
+                crate::agent::subagent::run_subagent_background_with_dependencies(
+                    task,
+                    skill,
+                    model,
+                    max_turns,
+                    &api_key,
+                    &base_url,
+                    &default_model,
+                    dependencies,
+                )
             } else {
-                crate::agent::subagent::run_subagent(task, skill, model, max_turns, &api_key, &base_url, &default_model)
+                crate::agent::subagent::run_subagent(
+                    task,
+                    skill,
+                    model,
+                    max_turns,
+                    &api_key,
+                    &base_url,
+                    &default_model,
+                )
             }
         }
         "manage_task" => {
-            let action = args["action"].as_str().context("Missing 'action' argument")?;
+            let action = args["action"]
+                .as_str()
+                .context("Missing 'action' argument")?;
             let task_id = args["task_id"].as_str();
             let timeout_secs = args["timeout_secs"].as_u64();
             let limit = args["limit"].as_u64().map(|n| n as usize);
@@ -533,6 +589,9 @@ fn dispatch_manage_task(
                     snap.name,
                     snap.elapsed_human
                 ));
+                if !snap.dependencies.is_empty() {
+                    out.push_str(&format!("      Prerequisites: {}\n", snap.dependencies.join(", ")));
+                }
                 if !snap.description.is_empty() {
                     out.push_str(&format!("      {}\n", snap.description));
                 }
@@ -545,8 +604,15 @@ fn dispatch_manage_task(
                 Some(snap) => {
                     let mut out = format!(
                         "Task: {}\nName: {}\nStatus: {}\nElapsed: {}\nCreated: {}\n",
-                        snap.id, snap.name, snap.status.as_str(), snap.elapsed_human, snap.created_at
+                        snap.id,
+                        snap.name,
+                        snap.status.as_str(),
+                        snap.elapsed_human,
+                        snap.created_at
                     );
+                    if !snap.dependencies.is_empty() {
+                        out.push_str(&format!("Prerequisites: {}\n", snap.dependencies.join(", ")));
+                    }
                     if let Some(ref started) = snap.started_at {
                         out.push_str(&format!("Started: {}\n", started));
                     }
@@ -555,7 +621,11 @@ fn dispatch_manage_task(
                     }
                     if let Some(ref result) = snap.result {
                         let preview = if result.len() > 500 {
-                            format!("{}...\n(truncated, {} chars total)", &result[..497], result.len())
+                            format!(
+                                "{}...\n(truncated, {} chars total)",
+                                &result[..497],
+                                result.len()
+                            )
                         } else {
                             result.clone()
                         };
@@ -570,8 +640,12 @@ fn dispatch_manage_task(
                         if !logs.is_empty() {
                             let total = logs.len();
                             let max_lines = 15;
-                            let start = if total > max_lines { total - max_lines } else { 0 };
-                            out.push_str(&format!("\nRecent Logs (showing {} of {} lines):\n", total - start, total));
+                            let start = total.saturating_sub(max_lines);
+                            out.push_str(&format!(
+                                "\nRecent Logs (showing {} of {} lines):\n",
+                                total - start,
+                                total
+                            ));
                             for line in &logs[start..] {
                                 out.push_str(&format!("  {}\n", line));
                             }
@@ -591,34 +665,36 @@ fn dispatch_manage_task(
         "logs" => {
             let id = task_id.context("'task_id' is required for 'logs' action")?;
             match tm.get_task(id) {
-                Some(snap) => {
-                    match tm.get_task_logs(id) {
-                        Some(logs) => {
-                            if logs.is_empty() {
-                                Ok(format!("Task '{}' has no recorded logs (status: {}).", id, snap.status.as_str()))
-                            } else {
-                                let max_lines = limit.unwrap_or(100);
-                                let total = logs.len();
-                                let start = if total > max_lines { total - max_lines } else { 0 };
-                                let mut out = format!(
-                                    "Task '{}' Logs (showing {} of {} lines, status: {}):\n",
-                                    id,
-                                    total - start,
-                                    total,
-                                    snap.status.as_str()
-                                );
-                                for line in &logs[start..] {
-                                    out.push_str(&format!("  {}\n", line));
-                                }
-                                if start > 0 {
-                                    out.push_str(&format!("  ... ({} earlier lines omitted)\n", start));
-                                }
-                                Ok(out)
+                Some(snap) => match tm.get_task_logs(id) {
+                    Some(logs) => {
+                        if logs.is_empty() {
+                            Ok(format!(
+                                "Task '{}' has no recorded logs (status: {}).",
+                                id,
+                                snap.status.as_str()
+                            ))
+                        } else {
+                            let max_lines = limit.unwrap_or(100);
+                            let total = logs.len();
+                            let start = total.saturating_sub(max_lines);
+                            let mut out = format!(
+                                "Task '{}' Logs (showing {} of {} lines, status: {}):\n",
+                                id,
+                                total - start,
+                                total,
+                                snap.status.as_str()
+                            );
+                            for line in &logs[start..] {
+                                out.push_str(&format!("  {}\n", line));
                             }
+                            if start > 0 {
+                                out.push_str(&format!("  ... ({} earlier lines omitted)\n", start));
+                            }
+                            Ok(out)
                         }
-                        None => Ok(format!("No log buffer found for task '{}'.", id)),
                     }
-                }
+                    None => Ok(format!("No log buffer found for task '{}'.", id)),
+                },
                 None => Ok(format!("Task '{}' not found.", id)),
             }
         }
@@ -629,7 +705,9 @@ fn dispatch_manage_task(
                 Ok(snap) => {
                     let mut out = format!(
                         "Task {} finished.\nStatus: {}\nElapsed: {}\n",
-                        snap.id, snap.status.as_str(), snap.elapsed_human
+                        snap.id,
+                        snap.status.as_str(),
+                        snap.elapsed_human
                     );
                     if let Some(ref result) = snap.result {
                         out.push_str(&format!("\nResult:\n{}\n", result));
@@ -649,6 +727,9 @@ fn dispatch_manage_task(
                 Err(e) => Ok(format!("Cancel failed: {}", e)),
             }
         }
-        _ => anyhow::bail!("Unknown manage_task action: '{}'. Valid: list, status, await, cancel, logs", action),
+        _ => anyhow::bail!(
+            "Unknown manage_task action: '{}'. Valid: list, status, await, cancel, logs",
+            action
+        ),
     }
 }

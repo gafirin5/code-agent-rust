@@ -1,11 +1,14 @@
+use crate::tools::result_store::ResultStore;
 use anyhow::{Context, Result};
 use std::time::Duration;
-use crate::tools::result_store::ResultStore;
 
 /// Fetches a URL and converts HTML content into clean readable Markdown/text.
 pub fn web_fetch(url: &str) -> Result<String> {
     if !url.starts_with("http://") && !url.starts_with("https://") {
-        anyhow::bail!("Invalid URL '{}'. Only 'http://' and 'https://' URLs are supported.", url);
+        anyhow::bail!(
+            "Invalid URL '{}'. Only 'http://' and 'https://' URLs are supported.",
+            url
+        );
     }
 
     let response = ureq::get(url)
@@ -16,7 +19,8 @@ pub fn web_fetch(url: &str) -> Result<String> {
         .with_context(|| format!("Failed to fetch URL: '{}'", url))?;
 
     let content_type = response.content_type().to_lowercase();
-    let body = response.into_string()
+    let body = response
+        .into_string()
         .with_context(|| format!("Failed to read response body from '{}'", url))?;
 
     let formatted = if content_type.contains("json") {
@@ -25,7 +29,8 @@ pub fn web_fetch(url: &str) -> Result<String> {
         } else {
             body
         }
-    } else if content_type.contains("html") || body.contains("<html") || body.contains("<!DOCTYPE") {
+    } else if content_type.contains("html") || body.contains("<html") || body.contains("<!DOCTYPE")
+    {
         html_to_markdown(&body)
     } else {
         body
@@ -56,7 +61,13 @@ pub fn web_search(query: &str, num_results: Option<usize>) -> Result<String> {
             if !results.is_empty() {
                 let mut out = format!("### Web Search Results for: \"{}\"\n\n", query);
                 for (idx, r) in results.iter().enumerate() {
-                    out.push_str(&format!("{}. [{}]({})\n   {}\n\n", idx + 1, r.title, r.url, r.snippet));
+                    out.push_str(&format!(
+                        "{}. [{}]({})\n   {}\n\n",
+                        idx + 1,
+                        r.title,
+                        r.url,
+                        r.snippet
+                    ));
                 }
                 return Ok(out);
             }
@@ -64,7 +75,10 @@ pub fn web_search(query: &str, num_results: Option<usize>) -> Result<String> {
     }
 
     // 2. Fallback: DuckDuckGo Instant Answer API
-    let api_url = format!("https://api.duckduckgo.com/?q={}&format=json&no_html=1&skip_disambig=1", encoded_query);
+    let api_url = format!(
+        "https://api.duckduckgo.com/?q={}&format=json&no_html=1&skip_disambig=1",
+        encoded_query
+    );
     if let Ok(response) = ureq::get(&api_url)
         .set("User-Agent", "ctrl-cli/0.2.0")
         .timeout(Duration::from_secs(10))
@@ -79,7 +93,11 @@ pub fn web_search(query: &str, num_results: Option<usize>) -> Result<String> {
                 let abstract_url = val["AbstractURL"].as_str().unwrap_or("");
 
                 if !abstract_txt.is_empty() {
-                    items.push((heading.to_string(), abstract_url.to_string(), abstract_txt.to_string()));
+                    items.push((
+                        heading.to_string(),
+                        abstract_url.to_string(),
+                        abstract_txt.to_string(),
+                    ));
                 }
 
                 if let Some(topics) = val["RelatedTopics"].as_array() {
@@ -87,7 +105,9 @@ pub fn web_search(query: &str, num_results: Option<usize>) -> Result<String> {
                         if items.len() >= limit {
                             break;
                         }
-                        if let (Some(text), Some(url)) = (t["Text"].as_str(), t["FirstURL"].as_str()) {
+                        if let (Some(text), Some(url)) =
+                            (t["Text"].as_str(), t["FirstURL"].as_str())
+                        {
                             let title = text.split(" - ").next().unwrap_or(text);
                             items.push((title.to_string(), url.to_string(), text.to_string()));
                         }
@@ -97,7 +117,13 @@ pub fn web_search(query: &str, num_results: Option<usize>) -> Result<String> {
                 if !items.is_empty() {
                     let mut out = format!("### Web Search Results for: \"{}\"\n\n", query);
                     for (idx, (title, url, snip)) in items.iter().enumerate() {
-                        out.push_str(&format!("{}. [{}]({})\n   {}\n\n", idx + 1, title, url, snip));
+                        out.push_str(&format!(
+                            "{}. [{}]({})\n   {}\n\n",
+                            idx + 1,
+                            title,
+                            url,
+                            snip
+                        ));
                     }
                     return Ok(out);
                 }
@@ -105,7 +131,10 @@ pub fn web_search(query: &str, num_results: Option<usize>) -> Result<String> {
         }
     }
 
-    Ok(format!("No search results found for query: '{}'. Try refining the search terms.", query))
+    Ok(format!(
+        "No search results found for query: '{}'. Try refining the search terms.",
+        query
+    ))
 }
 
 struct SearchItem {
@@ -128,11 +157,17 @@ fn parse_duckduckgo_html(html: &str, limit: usize) -> Vec<SearchItem> {
         let (title, raw_url) = if let Some(pos) = block.find(link_marker) {
             let after = &block[pos..];
             let href_pos = after.find("href=\"").map(|p| p + 6).unwrap_or(0);
-            let href_end = after[href_pos..].find('"').map(|p| href_pos + p).unwrap_or(0);
+            let href_end = after[href_pos..]
+                .find('"')
+                .map(|p| href_pos + p)
+                .unwrap_or(0);
             let url = &after[href_pos..href_end];
 
             let text_start = after.find('>').map(|p| p + 1).unwrap_or(0);
-            let text_end = after[text_start..].find("</a>").map(|p| text_start + p).unwrap_or(0);
+            let text_end = after[text_start..]
+                .find("</a>")
+                .map(|p| text_start + p)
+                .unwrap_or(0);
             let title = strip_tags(&after[text_start..text_end]);
             (title, url.to_string())
         } else {
@@ -146,7 +181,10 @@ fn parse_duckduckgo_html(html: &str, limit: usize) -> Vec<SearchItem> {
         let snippet = if let Some(pos) = block.find("class=\"result__snippet\"") {
             let after = &block[pos..];
             let text_start = after.find('>').map(|p| p + 1).unwrap_or(0);
-            let text_end = after[text_start..].find("</a>").map(|p| text_start + p).unwrap_or(0);
+            let text_end = after[text_start..]
+                .find("</a>")
+                .map(|p| text_start + p)
+                .unwrap_or(0);
             strip_tags(&after[text_start..text_end])
         } else {
             String::new()
@@ -191,7 +229,11 @@ pub fn html_to_markdown(html: &str) -> String {
             let tag_content = full_tag.to_lowercase();
             let tag_name = tag_content.split_whitespace().next().unwrap_or("");
 
-            if tag_name == "script" || tag_name == "style" || tag_name == "svg" || tag_name == "noscript" {
+            if tag_name == "script"
+                || tag_name == "style"
+                || tag_name == "svg"
+                || tag_name == "noscript"
+            {
                 let close_tag = format!("</{}>", tag_name);
                 if let Some(close_pos) = tag_rest.to_lowercase().find(&close_tag) {
                     rest = &tag_rest[close_pos + close_tag.len()..];

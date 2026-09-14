@@ -1,12 +1,19 @@
+use crate::tools::result_store::ResultStore;
 use anyhow::Result;
 use std::fs;
 use std::path::{Path, PathBuf};
-use crate::tools::result_store::ResultStore;
 
 fn should_skip_dir(dir_name: &str) -> bool {
     matches!(
         dir_name,
-        ".git" | ".cargo" | "node_modules" | "target" | ".zig-cache" | "zig-out" | ".vscode" | ".idea"
+        ".git"
+            | ".cargo"
+            | "node_modules"
+            | "target"
+            | ".zig-cache"
+            | "zig-out"
+            | ".vscode"
+            | ".idea"
     )
 }
 
@@ -54,16 +61,13 @@ fn matches_glob_simple(filename: &str, pattern: &str) -> bool {
     }
 }
 
-pub fn glob_files(
-    pattern: &str,
-    path_str: Option<&str>,
-    mode: Option<&str>,
-) -> Result<String> {
+pub fn glob_files(pattern: &str, path_str: Option<&str>, mode: Option<&str>) -> Result<String> {
     let base_dir = path_str.unwrap_or(".");
-    let root = Path::new(base_dir);
-    if !root.exists() {
+    let sandboxed_root = crate::tools::filesystem::resolve_sandboxed_path(base_dir)?;
+    if !sandboxed_root.exists() {
         anyhow::bail!("Base directory not found: '{}'", base_dir);
     }
+    let root = &sandboxed_root;
 
     let mut files = Vec::new();
     collect_files_recursive(root, &mut files, 5000);
@@ -73,7 +77,11 @@ pub fn glob_files(
 
     let mut matched = Vec::new();
     for file in files {
-        let rel_path = file.strip_prefix(root).unwrap_or(&file).to_string_lossy().replace('\\', "/");
+        let rel_path = file
+            .strip_prefix(root)
+            .unwrap_or(&file)
+            .to_string_lossy()
+            .replace('\\', "/");
         let filename = file.file_name().and_then(|n| n.to_str()).unwrap_or("");
 
         let is_match = if is_path_pattern {
@@ -87,7 +95,9 @@ pub fn glob_files(
         }
     }
 
-    let is_count = mode.map(|m| m.eq_ignore_ascii_case("count")).unwrap_or(false);
+    let is_count = mode
+        .map(|m| m.eq_ignore_ascii_case("count"))
+        .unwrap_or(false);
     if is_count {
         return Ok(format!(
             "Total matched files for pattern '{}': {}",
@@ -97,7 +107,10 @@ pub fn glob_files(
     }
 
     if matched.is_empty() {
-        return Ok(format!("No files found matching pattern '{}' in '{}'", pattern, base_dir));
+        return Ok(format!(
+            "No files found matching pattern '{}' in '{}'",
+            pattern, base_dir
+        ));
     }
 
     let total = matched.len();
@@ -108,7 +121,10 @@ pub fn glob_files(
     }
 
     if total > display_limit {
-        out.push_str(&format!("  ... and {} more files (use more specific pattern)\n", total - display_limit));
+        out.push_str(&format!(
+            "  ... and {} more files (use more specific pattern)\n",
+            total - display_limit
+        ));
     }
 
     Ok(out)
@@ -124,16 +140,21 @@ pub fn grep_files(
     context_lines: Option<usize>,
 ) -> Result<String> {
     let base_dir = path_str.unwrap_or(".");
-    let root = Path::new(base_dir);
-    if !root.exists() {
+    let sandboxed_root = crate::tools::filesystem::resolve_sandboxed_path(base_dir)?;
+    if !sandboxed_root.exists() {
         anyhow::bail!("Directory not found: '{}'", base_dir);
     }
+    let root = &sandboxed_root;
 
     let mut files = Vec::new();
     collect_files_recursive(root, &mut files, 3000);
 
     let ci = case_insensitive.unwrap_or(false);
-    let target_query = if ci { query.to_lowercase() } else { query.to_string() };
+    let target_query = if ci {
+        query.to_lowercase()
+    } else {
+        query.to_string()
+    };
     let limit = head_limit.unwrap_or(50).max(1);
     let skip_count = offset.unwrap_or(1).saturating_sub(1);
     let ctx = context_lines.unwrap_or(0);
@@ -168,24 +189,32 @@ pub fn grep_files(
 
         let content = String::from_utf8_lossy(&bytes);
         let lines: Vec<&str> = content.lines().collect();
-        let rel_file = file_path.strip_prefix(root).unwrap_or(&file_path).to_string_lossy().replace('\\', "/");
+        let rel_file = file_path
+            .strip_prefix(root)
+            .unwrap_or(&file_path)
+            .to_string_lossy()
+            .replace('\\', "/");
 
         for (idx, line) in lines.iter().enumerate() {
-            let line_to_check = if ci { line.to_lowercase() } else { line.to_string() };
+            let line_to_check = if ci {
+                line.to_lowercase()
+            } else {
+                line.to_string()
+            };
             if line_to_check.contains(&target_query) {
                 let mut before = Vec::new();
                 if ctx > 0 {
                     let start_ctx = idx.saturating_sub(ctx);
-                    for c_idx in start_ctx..idx {
-                        before.push((c_idx + 1, lines[c_idx].to_string()));
+                    for (c_idx, c_line) in lines.iter().enumerate().take(idx).skip(start_ctx) {
+                        before.push((c_idx + 1, c_line.to_string()));
                     }
                 }
 
                 let mut after = Vec::new();
                 if ctx > 0 {
                     let end_ctx = (idx + 1 + ctx).min(lines.len());
-                    for c_idx in (idx + 1)..end_ctx {
-                        after.push((c_idx + 1, lines[c_idx].to_string()));
+                    for (c_idx, c_line) in lines.iter().enumerate().take(end_ctx).skip(idx + 1) {
+                        after.push((c_idx + 1, c_line.to_string()));
                     }
                 }
 
@@ -202,10 +231,17 @@ pub fn grep_files(
 
     let total_matches = all_matches.len();
     if total_matches == 0 {
-        return Ok(format!("No matches found for query '{}' in '{}'", query, base_dir));
+        return Ok(format!(
+            "No matches found for query '{}' in '{}'",
+            query, base_dir
+        ));
     }
 
-    let sliced = all_matches.into_iter().skip(skip_count).take(limit).collect::<Vec<_>>();
+    let sliced = all_matches
+        .into_iter()
+        .skip(skip_count)
+        .take(limit)
+        .collect::<Vec<_>>();
     let mut out = format!(
         "Found {} match(es) for query '{}' (showing {}-{}):\n\n",
         total_matches,

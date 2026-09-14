@@ -42,7 +42,12 @@ impl ResultStore {
             let result_id = format!("tr_{}", store.counter);
             store.entries.insert(result_id.clone(), output.clone());
 
-            let preview_lines = lines.iter().take(max_lines).cloned().collect::<Vec<&str>>().join("\n");
+            let preview_lines = lines
+                .iter()
+                .take(max_lines)
+                .cloned()
+                .collect::<Vec<&str>>()
+                .join("\n");
             format!(
                 "[OUTPUT TRUNCATED]\nShowing first {} of {} lines ({} total characters).\nUse tool `read_tool_result` with result_id='{}', offset={}, limit={} to read more.\n\n{}",
                 max_lines,

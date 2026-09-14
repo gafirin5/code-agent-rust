@@ -1,13 +1,13 @@
 #[path = "../src/agent/tasks.rs"]
 mod tasks;
 
+use anyhow::anyhow;
 use std::collections::HashSet;
 use std::panic;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
-use anyhow::anyhow;
 use tasks::{TaskManager, TaskStatus};
 
 // ============================================================================
@@ -100,7 +100,7 @@ fn test_ux_stampede_drain_zero_duplicates_high_contention() {
     }
 
     // Allow drain threads to process any remaining tasks
-    let deadline = Instant::now() + Duration::from_secs(5);
+    let deadline = Instant::now() + Duration::from_secs(15);
     while Instant::now() < deadline {
         let count = drained_snapshots.lock().unwrap().len();
         if count >= TOTAL_TASKS {
@@ -133,13 +133,19 @@ fn test_ux_stampede_drain_zero_duplicates_high_contention() {
             snap.id
         );
         assert!(snap.notified, "Drained snapshot must be marked notified");
-        assert!(snap.status.is_terminal(), "Drained snapshot must be in a terminal state");
+        assert!(
+            snap.status.is_terminal(),
+            "Drained snapshot must be in a terminal state"
+        );
         assert_eq!(snap.status, TaskStatus::Completed);
     }
 
     // Verification 3: Zero drops (set of drained IDs equals set of spawned IDs)
     let spawned_set: HashSet<String> = spawned_ids.into_iter().collect();
-    assert_eq!(seen_ids, spawned_set, "Drained task set must match spawned task set");
+    assert_eq!(
+        seen_ids, spawned_set,
+        "Drained task set must match spawned task set"
+    );
 
     // Verification 4: Post-drain idempotency
     let post_drain = manager.drain_unnotified_terminal_tasks();
@@ -266,7 +272,7 @@ fn test_ux_stampede_drain_mixed_terminal_states_and_panics() {
     }
 
     // Wait until all 160 are collected
-    let deadline = Instant::now() + Duration::from_secs(5);
+    let deadline = Instant::now() + Duration::from_secs(15);
     while Instant::now() < deadline {
         if drained_acc.lock().unwrap().len() >= TOTAL_TASKS {
             break;
@@ -280,7 +286,11 @@ fn test_ux_stampede_drain_mixed_terminal_states_and_panics() {
     }
 
     let collected = drained_acc.lock().unwrap().clone();
-    assert_eq!(collected.len(), TOTAL_TASKS, "All 160 mixed tasks must be drained");
+    assert_eq!(
+        collected.len(),
+        TOTAL_TASKS,
+        "All 160 mixed tasks must be drained"
+    );
 
     let mut seen = HashSet::new();
     let mut completed_count = 0;
@@ -288,7 +298,11 @@ fn test_ux_stampede_drain_mixed_terminal_states_and_panics() {
     let mut cancelled_count = 0;
 
     for snap in &collected {
-        assert!(seen.insert(snap.id.clone()), "Duplicate drained: {}", snap.id);
+        assert!(
+            seen.insert(snap.id.clone()),
+            "Duplicate drained: {}",
+            snap.id
+        );
         assert!(snap.notified);
         assert!(snap.status.is_terminal());
 
@@ -307,12 +321,18 @@ fn test_ux_stampede_drain_mixed_terminal_states_and_panics() {
                 assert!(snap.error.is_some(), "Failed task must have error field");
             }
             TaskStatus::Cancelled => cancelled_count += 1,
-            _ => panic!("Unexpected non-terminal status in drained: {:?}", snap.status),
+            _ => panic!(
+                "Unexpected non-terminal status in drained: {:?}",
+                snap.status
+            ),
         }
     }
 
     assert_eq!(completed_count, 40, "Expected 40 completed tasks");
-    assert_eq!(failed_count, 80, "Expected 80 failed tasks (40 regular + 40 panics)");
+    assert_eq!(
+        failed_count, 80,
+        "Expected 80 failed tasks (40 regular + 40 panics)"
+    );
     assert_eq!(cancelled_count, 40, "Expected 40 cancelled tasks");
 }
 
@@ -413,7 +433,7 @@ fn test_ux_interleaved_wait_cancel_vs_drain_strict_disjointness() {
     }
 
     // Allow drain threads to process any leftover unnotified tasks
-    let deadline = Instant::now() + Duration::from_secs(5);
+    let deadline = Instant::now() + Duration::from_secs(15);
     while Instant::now() < deadline {
         let manual_count = manually_marked.lock().unwrap().len();
         let drain_count = drained_snaps.lock().unwrap().len();
@@ -476,19 +496,31 @@ fn test_ux_repl_inter_turn_empty_line_enter_cycles() {
 
     // Turn 1: Fresh REPL startup, zero tasks
     let turn1_notifications = manager.drain_unnotified_terminal_tasks();
-    assert!(turn1_notifications.is_empty(), "Turn 1: Startup must produce 0 notifications");
+    assert!(
+        turn1_notifications.is_empty(),
+        "Turn 1: Startup must produce 0 notifications"
+    );
 
-    // Spawn a background task that takes 60ms
+    // Spawn a background task gated by atomic flag to eliminate timing races
+    let allow_finish = Arc::new(AtomicBool::new(false));
+    let allow_finish_clone = allow_finish.clone();
     let (task_a, _) = manager
         .spawn_task(
             "subagent-indexer".into(),
             "Indexing workspace".into(),
-            |_| {
-                thread::sleep(Duration::from_millis(60));
+            move |_| {
+                while !allow_finish_clone.load(Ordering::Relaxed) {
+                    thread::sleep(Duration::from_millis(2));
+                }
                 Ok("indexed 500 files".into())
             },
         )
         .unwrap();
+
+    // Ensure task is actively running before evaluating REPL turns
+    manager
+        .await_running(&task_a, Some(Duration::from_secs(5)))
+        .expect("Task must start running");
 
     // Turn 2: User immediately presses Enter on an empty line (task still running)
     let turn2_notifications = manager.drain_unnotified_terminal_tasks();
@@ -497,16 +529,18 @@ fn test_ux_repl_inter_turn_empty_line_enter_cycles() {
         "Turn 2: Fast empty-line enter while task is running must produce 0 notifications"
     );
 
-    // Turn 3: User presses Enter again after 15ms (task still running)
-    thread::sleep(Duration::from_millis(15));
+    // Turn 3: User presses Enter again (task still running)
     let turn3_notifications = manager.drain_unnotified_terminal_tasks();
     assert!(
         turn3_notifications.is_empty(),
         "Turn 3: Repeated empty-line enter while task is running must produce 0 notifications"
     );
 
-    // Wait until Task A completes in background
-    let snap_a = manager.await_task(&task_a, Some(Duration::from_secs(3))).unwrap();
+    // Signal Task A to finish and wait for completion
+    allow_finish.store(true, Ordering::Relaxed);
+    let snap_a = manager
+        .await_task(&task_a, Some(Duration::from_secs(5)))
+        .unwrap();
     assert_eq!(snap_a.status, TaskStatus::Completed);
 
     // Turn 4: User presses Enter on empty line AFTER Task A completed
@@ -533,27 +567,31 @@ fn test_ux_repl_inter_turn_empty_line_enter_cycles() {
 
     // Spawn two tasks: Task B (fails immediately), Task C (completes immediately)
     let (task_b, _) = manager
-        .spawn_task(
-            "subagent-lint".into(),
-            "Linter run".into(),
-            |_| Err(anyhow!("Syntax error on line 42")),
-        )
+        .spawn_task("subagent-lint".into(), "Linter run".into(), |_| {
+            Err(anyhow!("Syntax error on line 42"))
+        })
         .unwrap();
 
     let (task_c, _) = manager
-        .spawn_task(
-            "subagent-format".into(),
-            "Formatter run".into(),
-            |_| Ok("formatted 12 files".into()),
-        )
+        .spawn_task("subagent-format".into(), "Formatter run".into(), |_| {
+            Ok("formatted 12 files".into())
+        })
         .unwrap();
 
-    let _ = manager.await_task(&task_b, Some(Duration::from_secs(2))).unwrap();
-    let _ = manager.await_task(&task_c, Some(Duration::from_secs(2))).unwrap();
+    let _ = manager
+        .await_task(&task_b, Some(Duration::from_secs(2)))
+        .unwrap();
+    let _ = manager
+        .await_task(&task_c, Some(Duration::from_secs(2)))
+        .unwrap();
 
     // Turn 7: Next user prompt turn announces both Task B and Task C in sorted order
     let turn7_notifications = manager.drain_unnotified_terminal_tasks();
-    assert_eq!(turn7_notifications.len(), 2, "Turn 7: Must announce both finished tasks");
+    assert_eq!(
+        turn7_notifications.len(),
+        2,
+        "Turn 7: Must announce both finished tasks"
+    );
     assert_eq!(turn7_notifications[0].id, task_b);
     assert_eq!(turn7_notifications[1].id, task_c);
     assert_eq!(turn7_notifications[0].status, TaskStatus::Failed);
@@ -633,8 +671,16 @@ fn test_ux_rapid_creation_clearing_and_drain_race() {
         h.join().unwrap();
     }
 
-    // Allow background tasks to run and drainers/clearers to contend
-    thread::sleep(Duration::from_millis(150));
+    // Wait until all tasks have reached terminal state before stopping drainers
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while Instant::now() < deadline {
+        let active = manager.list_tasks().iter().any(|t| t.status.is_active());
+        if !active {
+            break;
+        }
+        thread::sleep(Duration::from_millis(5));
+    }
+    thread::sleep(Duration::from_millis(20));
 
     running.store(false, Ordering::Relaxed);
     for h in drain_handles {
@@ -659,8 +705,20 @@ fn test_ux_rapid_creation_clearing_and_drain_race() {
         assert!(snap.status.is_terminal());
     }
 
+    // Drain any leftover unnotified tasks to verify zero duplicates
+    let leftovers = manager.drain_unnotified_terminal_tasks();
+    for snap in &leftovers {
+        assert!(
+            seen.insert(snap.id.clone()),
+            "Duplicate drained under clear hammer: {}",
+            snap.id
+        );
+        assert!(snap.notified);
+        assert!(snap.status.is_terminal());
+    }
+
     // Total drained cannot exceed TOTAL_TASKS
-    assert!(collected.len() <= TOTAL_TASKS);
+    assert!(seen.len() <= TOTAL_TASKS);
 
     // Final drain must be empty
     assert!(manager.drain_unnotified_terminal_tasks().is_empty());
@@ -678,11 +736,9 @@ fn test_ux_drain_sorting_deterministic_numerical_order() {
     let mut ids = Vec::new();
     for i in 1..=25 {
         let (id, _) = manager
-            .spawn_task(
-                format!("sort-test-{}", i),
-                "payload".into(),
-                |_| Ok("ok".into()),
-            )
+            .spawn_task(format!("sort-test-{}", i), "payload".into(), |_| {
+                Ok("ok".into())
+            })
             .unwrap();
         ids.push(id);
     }
@@ -720,11 +776,9 @@ fn test_ux_read_only_get_unnotified_preserves_notified_state() {
     let mut ids = Vec::new();
     for i in 0..TASK_COUNT {
         let (id, _) = manager
-            .spawn_task(
-                format!("ro-{}", i),
-                "read only payload".into(),
-                |_| Ok("done".into()),
-            )
+            .spawn_task(format!("ro-{}", i), "read only payload".into(), |_| {
+                Ok("done".into())
+            })
             .unwrap();
         ids.push(id);
     }
@@ -742,7 +796,10 @@ fn test_ux_read_only_get_unnotified_preserves_notified_state() {
                 let unnotified = mgr.get_unnotified_terminal_tasks();
                 assert_eq!(unnotified.len(), TASK_COUNT);
                 for snap in &unnotified {
-                    assert!(!snap.notified, "get_unnotified must NOT mark task as notified");
+                    assert!(
+                        !snap.notified,
+                        "get_unnotified must NOT mark task as notified"
+                    );
                 }
             }
         }));
@@ -821,7 +878,10 @@ fn test_ux_notification_formatting_tty_and_nontty_parity() {
     for snap in &drained {
         // Test interactive TTY rendering
         let tty_out = snap.format_notification(true);
-        assert!(tty_out.contains("\x1B["), "TTY output must contain ANSI color codes");
+        assert!(
+            tty_out.contains("\x1B["),
+            "TTY output must contain ANSI color codes"
+        );
         assert!(tty_out.contains(&snap.id));
         assert!(tty_out.contains(&snap.name));
         assert!(tty_out.contains(&snap.elapsed_human));

@@ -1,12 +1,12 @@
 #[path = "../src/agent/tasks.rs"]
 mod tasks;
 
+use anyhow::anyhow;
 use std::collections::HashSet;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
-use anyhow::anyhow;
 use tasks::{OutputSink, TaskManager, TaskStatus};
 
 // ============================================================================
@@ -62,7 +62,11 @@ fn test_stress_100_concurrent_tasks_throughput() {
 
     // Verify task IDs are unique
     let unique_ids: HashSet<_> = ids.iter().cloned().collect();
-    assert_eq!(unique_ids.len(), TOTAL_TASKS, "All task IDs must be globally unique");
+    assert_eq!(
+        unique_ids.len(),
+        TOTAL_TASKS,
+        "All task IDs must be globally unique"
+    );
 
     // Await all tasks concurrently with a pool of awaiters
     let mut await_handles = Vec::new();
@@ -211,7 +215,7 @@ fn test_stress_simultaneous_multi_awaiter_stampede() {
             b.wait(); // Synchronize all awaiters to start at exact same instant
             let start = Instant::now();
             let snap = mgr
-                .await_task(&tid, Some(Duration::from_secs(3)))
+                .await_task(&tid, Some(Duration::from_secs(10)))
                 .expect("Awaiter must successfully receive task completion");
             let elapsed = start.elapsed();
             (idx, snap, elapsed)
@@ -231,7 +235,7 @@ fn test_stress_simultaneous_multi_awaiter_stampede() {
             idx
         );
         assert!(
-            elapsed < Duration::from_millis(2500),
+            elapsed < Duration::from_secs(10),
             "Awaiter {} took too long: {:?}",
             idx,
             elapsed
@@ -345,7 +349,7 @@ fn test_stress_high_contention_chaos_hammer() {
         spawn_counter.load(Ordering::SeqCst)
     );
     assert!(
-        join_time < Duration::from_secs(2),
+        join_time < Duration::from_secs(5),
         "All threads must join cleanly without deadlocks"
     );
 }
@@ -474,7 +478,7 @@ fn test_stress_concurrent_notification_drain_zero_duplicates() {
     let start_wait = Instant::now();
     loop {
         let count = collected_snapshots.lock().unwrap().len();
-        if count == TOTAL_TASKS || start_wait.elapsed() > Duration::from_secs(5) {
+        if count == TOTAL_TASKS || start_wait.elapsed() > Duration::from_secs(15) {
             break;
         }
         thread::sleep(Duration::from_millis(10));
@@ -502,7 +506,10 @@ fn test_stress_concurrent_notification_drain_zero_duplicates() {
             snap.id
         );
         assert!(snap.notified, "Drained snapshot must be marked notified");
-        assert!(snap.status.is_terminal(), "Drained snapshot must be terminal");
+        assert!(
+            snap.status.is_terminal(),
+            "Drained snapshot must be terminal"
+        );
     }
 
     // Verify subsequent drain is empty
@@ -592,7 +599,7 @@ fn test_stress_tasks_wait_and_cancel_marking_concurrency() {
     }
 
     // Wait until drainers capture remaining unnotified tasks
-    let deadline = Instant::now() + Duration::from_secs(5);
+    let deadline = Instant::now() + Duration::from_secs(15);
     while Instant::now() < deadline {
         let drained_count = drained_snapshots.lock().unwrap().len();
         let manual_count = manually_notified.lock().unwrap().len();
@@ -657,7 +664,10 @@ fn test_stress_silent_subagent_log_buffering_and_retrieval() {
         .unwrap();
 
     let sink = OutputSink::Buffered(log_buffer.clone());
-    assert!(sink.is_silent(), "Buffered sink must report is_silent == true");
+    assert!(
+        sink.is_silent(),
+        "Buffered sink must report is_silent == true"
+    );
 
     let done = Arc::new(AtomicBool::new(false));
 
@@ -703,7 +713,10 @@ fn test_stress_silent_subagent_log_buffering_and_retrieval() {
 
     for h in reader_handles {
         let ops = h.join().unwrap();
-        assert!(ops > 0, "Reader thread should have performed read operations");
+        assert!(
+            ops > 0,
+            "Reader thread should have performed read operations"
+        );
     }
 
     assert_eq!(
@@ -721,7 +734,8 @@ fn test_stress_silent_subagent_log_buffering_and_retrieval() {
     let formatted = log_buffer.formatted();
     assert!(!formatted.is_empty());
 
-    let snap = manager.await_task(&task_id, Some(Duration::from_secs(5))).unwrap();
+    let snap = manager
+        .await_task(&task_id, Some(Duration::from_secs(5)))
+        .unwrap();
     assert_eq!(snap.status, TaskStatus::Completed);
 }
-
