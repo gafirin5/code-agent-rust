@@ -79,59 +79,56 @@ AI_MODEL=llama-3.3-70b-versatile
 
 #### 3. Jalankan Aplikasi!
 ```bash
-# Jalankan langsung dalam mode interaktif (REPL):
-cargo run
+# Jalankan langsung mode Chat / REPL:
+ctrl-cli
+# (Atau jika dari source: cargo run)
+
+# Ingin langsung masuk ke tampilan TUI Fullscreen?
+ctrl-cli-tui
+# (Atau jika dari source: cargo run --bin ctrl-cli-tui)
 ```
 *Selesai! Terminal siap menerima perintah kode pertamamu.* 🎉
 
 ---
 
-### 🎮 4 Cara Menggunakan ctrl-cli
+### 🎮 Cara Menggunakan ctrl-cli (Pilihan Mode)
 
 Pilihlah gaya penggunaan yang paling nyaman untukmu:
 
-#### 1. 💬 Mode Chat Interaktif (REPL) — *Paling Populer*
-Ketik langsung pertanyaan atau perintah di terminal:
+#### 1. 💬 Mode Chat Interaktif (REPL) — *Default & Paling Ringan*
+Cukup ketik `ctrl-cli` di terminal:
 ```bash
-cargo run
+ctrl-cli
 ```
-Tampilan terminal:
-```text
-══════════════════════════════════════════════════════════════
- 🤖 ctrl-cli REPL (AI Coding Agent v0.3.0)
- Active Model: llama-3.3-70b-versatile
- Ketik pertanyaanmu lalu tekan Enter.
- Ketik `/` untuk melihat menu perintah cepat.
-══════════════════════════════════════════════════════════════
+* Di dalam REPL, kamu bisa mengetik instruksi kode apa saja.
+* **Pindah ke TUI kapan saja**: Ketik `/tui` lalu tekan Enter!
 
-[llama-3.3-70b] ➜ Buatkan fungsi validasi email di Rust lengkap dengan unit test-nya
+#### 2. 🖥️ Mode TUI Fullscreen (Terminal Visual) — *Modern & Interaktif*
+Cukup ketik `ctrl-cli-tui` di terminal:
+```bash
+ctrl-cli-tui
 ```
+* Menampilkan antarmuka fullscreen berbasis Ratatui dengan panel riwayat pesan, input editor, tab status task subagent (`F2`), skill picker (`F3`), dan tab model/provider (`F4`).
+* **Kembali ke REPL kapan saja**: Tekan tombol **`F5`** atau ketik `/repl` (atau `:cli`).
 
-#### 2. 🌐 Mode Web Dashboard (Tampilan Browser) — *Baru di v0.3.0!*
+#### 3. 🌐 Mode Web Dashboard (Tampilan Browser)
 Lebih suka tampilan visual di browser? Cukup jalankan:
 ```bash
-cargo run -- serve
+ctrl-cli serve
 ```
-Lalu buka browser di: **`http://127.0.0.1:3000`**. Kamu bisa chatting dengan AI melalui antarmuka web modern lengkap dengan editor kode dan task board!
-
-#### 3. 🖥️ Mode TUI Fullscreen (Terminal Visual) — *Baru di v0.3.0!*
-Untuk kamu penggemar terminal ala *Vim/Neovim/Htop*:
-```bash
-cargo run -- --tui
-```
-Menampilkan dashboard fullscreen di terminal dengan panel chat, daftar file, dan status task.
+Lalu buka browser di: **`http://127.0.0.1:3000`**. Kamu bisa memantau tasks dan berinteraksi melalui antarmuka web modern!
 
 #### 4. ⚡ Mode Satu Baris (Generate One-Shot)
 Jalankan tugas singkat langsung dari satu baris terminal tanpa masuk ke REPL:
 ```bash
 # Tanya / minta kode singkat
-cargo run -- generate "bagaimana cara membaca file baris demi baris di Rust?"
+ctrl-cli generate "bagaimana cara membaca file baris demi baris di Rust?"
 
 # Simpan langsung hasilnya ke file baru tanpa ribet copy-paste
-cargo run -- generate -o salam.py "buat script python untuk menyapa pengguna sesuai waktu"
+ctrl-cli generate -o salam.py "buat script python untuk menyapa pengguna sesuai waktu"
 
 # Jalankan dengan persona spesialis
-cargo run -- --skill rust-expert generate "buatkan arsitektur concurrency thread-safe"
+ctrl-cli generate --skill rust-expert "buatkan arsitektur concurrency thread-safe"
 ```
 
 ---

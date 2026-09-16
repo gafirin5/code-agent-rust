@@ -19,6 +19,7 @@ use crate::agent::permissions::{
 };
 use crate::agent::provider::ProvidersRegistry;
 use crate::agent::tasks::{AgentUiEvent, CancellationToken, OutputSink, TaskManager};
+use crate::telemetry::{capture_metrics_with_cpu, CpuSampler, ProcessMetrics};
 use crate::types::{ChatMessage, MessageRole};
 use crate::{build_system_prompt, get_available_skills, Skill, UserProfile, COMMAND_SPECS};
 
@@ -144,6 +145,11 @@ pub struct App {
     pub action_tx: Sender<UiAction>,
     pub action_rx: Receiver<UiAction>,
     pub perm_tx: Sender<PermissionRequest>,
+
+    // Telemetry state
+    pub metrics: Option<ProcessMetrics>,
+    pub last_metrics_poll: Instant,
+    pub metrics_sampler: CpuSampler,
 }
 
 impl App {
@@ -164,6 +170,8 @@ impl App {
         let active_prov = providers_reg.get_active_provider();
         let current_model = active_prov.default_model.clone();
         let loaded_history = MemoryManager::load_session_history().unwrap_or_default();
+        let mut metrics_sampler = CpuSampler::new();
+        let initial_metrics = capture_metrics_with_cpu(None, &mut metrics_sampler);
 
         let mut chat_items = Vec::new();
         let now_str = chrono_compact_now();
@@ -239,6 +247,19 @@ impl App {
             action_tx,
             action_rx,
             perm_tx,
+            metrics: Some(initial_metrics),
+            last_metrics_poll: Instant::now(),
+            metrics_sampler,
+        }
+    }
+
+    /// Periodic tick for telemetry polling (1 Hz cadence).
+    pub fn tick(&mut self) {
+        let now = Instant::now();
+        if now.duration_since(self.last_metrics_poll) >= std::time::Duration::from_millis(1000) {
+            let m = capture_metrics_with_cpu(None, &mut self.metrics_sampler);
+            self.metrics = Some(m);
+            self.last_metrics_poll = now;
         }
     }
 

@@ -3,6 +3,14 @@ name = "ctrl-cli"
 version = "0.3.0"
 edition = "2021"
 
+[[bin]]
+name = "ctrl-cli"
+path = "src/main.rs"
+
+[[bin]]
+name = "ctrl-cli-tui"
+path = "src/bin/ctrl-cli-tui.rs"
+
 [dependencies]
 clap = { version = "4.5", features = ["derive"] }
 anyhow = "1.0"

@@ -7,6 +7,9 @@ use std::path::PathBuf;
 use std::thread;
 use std::time::Duration;
 
+#[path = "telemetry/mod.rs"]
+pub mod telemetry;
+
 /// Compile-time fallback for the dashboard HTML if file cannot be read from disk.
 const EMBEDDED_INDEX_HTML: &str = include_str!("../../index.html");
 
@@ -146,6 +149,11 @@ fn handle_connection(mut stream: TcpStream) -> Result<()> {
         ("GET", "/api/tasks") => {
             let tasks = TaskManager::global().list_tasks();
             let json_bytes = serde_json::to_vec(&tasks)?;
+            send_response(&mut stream, 200, "OK", "application/json", &json_bytes)?;
+        }
+        ("GET", "/api/metrics") => {
+            let metrics = telemetry::capture_metrics(None);
+            let json_bytes = serde_json::to_vec(&metrics)?;
             send_response(&mut stream, 200, "OK", "application/json", &json_bytes)?;
         }
         ("GET", p) if p.starts_with("/api/tasks/") => {
@@ -351,6 +359,26 @@ mod tests {
         let mut opt_status = String::new();
         opt_reader.read_line(&mut opt_status).unwrap();
         assert!(opt_status.contains("204 No Content"));
+
+        // 7b. GET /api/metrics
+        let metrics_resp = ureq::get(&format!("{}/api/metrics", base_url))
+            .call()
+            .expect("GET /api/metrics must succeed");
+        assert_eq!(metrics_resp.status(), 200);
+        assert_eq!(
+            metrics_resp.header("content-type").unwrap(),
+            "application/json"
+        );
+        assert_eq!(
+            metrics_resp.header("access-control-allow-origin").unwrap(),
+            "*"
+        );
+        let metrics_json: serde_json::Value = metrics_resp.into_json().expect("Valid metrics JSON");
+        assert!(metrics_json.get("memory").is_some());
+        assert!(metrics_json.get("cpu").is_some());
+        assert!(metrics_json.get("storage").is_some());
+        assert!(metrics_json.get("threads").is_some());
+        assert!(metrics_json.get("timestamp").is_some());
 
         // 8. Unknown path 404
         let err_404 = ureq::get(&format!("{}/unknown/route", base_url)).call();

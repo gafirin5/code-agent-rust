@@ -1,5 +1,6 @@
 pub mod agent;
 pub mod server;
+pub use server::telemetry;
 pub mod tools;
 pub mod tui;
 pub mod types;
@@ -813,6 +814,11 @@ pub const COMMAND_SPECS: &[CommandSpec] = &[
         description: "Kelola background tasks (list, view, cancel, wait, logs, clear)",
     },
     CommandSpec {
+        primary: "/stats",
+        aliases: &["/metrics", "/telemetry", "/resources"],
+        description: "Pantau pemakaian resource real-time (RAM, CPU, thread, storage)",
+    },
+    CommandSpec {
         primary: "/tui",
         aliases: &["/gui"],
         description: "Beralih ke antarmuka grafis terminal (Ratatui TUI)",
@@ -994,6 +1000,20 @@ impl Autocomplete for SlashCompleter {
                     suggestions.push(format!("/tasks {}", s));
                 }
             }
+        } else if let Some(prefix) = input.strip_prefix("/stats ") {
+            let subs = ["table", "json", "--json", "reset"];
+            for s in subs {
+                if s.starts_with(&prefix.to_lowercase()) {
+                    suggestions.push(format!("/stats {}", s));
+                }
+            }
+        } else if let Some(prefix) = input.strip_prefix("/metrics ") {
+            let subs = ["table", "json", "--json", "reset"];
+            for s in subs {
+                if s.starts_with(&prefix.to_lowercase()) {
+                    suggestions.push(format!("/metrics {}", s));
+                }
+            }
         } else if input.starts_with('/') {
             let lower_input = input.to_lowercase();
             let subcommands = [
@@ -1016,6 +1036,8 @@ impl Autocomplete for SlashCompleter {
                     "Aktifkan / nonaktifkan badge token otomatis",
                 ),
                 ("/stream toggle", "Toggle on/off streaming SSE"),
+                ("/stats table", "Tampilkan tabel metrik resource sistem"),
+                ("/stats json", "Output metrik proses format JSON"),
                 ("/lang en", "Switch response language to English"),
                 ("/lang id", "Ganti bahasa respon ke Bahasa Indonesia"),
                 ("/lang zh", "切换回复语言为中文 (Chinese)"),
@@ -1155,9 +1177,15 @@ fn main() -> Result<()> {
             start_repl(&mut profile, &mut providers_reg)?;
         }
         None => {
+            let exe_is_tui = std::env::current_exe()
+                .ok()
+                .and_then(|p| p.file_stem().map(|s| s.to_string_lossy().to_lowercase()))
+                .map(|name| name.ends_with("-tui") || name.ends_with("_tui"))
+                .unwrap_or(false);
+
             if cli.cli {
                 start_repl(&mut profile, &mut providers_reg)?;
-            } else if cli.tui || std::io::stdin().is_terminal() {
+            } else if cli.tui || exe_is_tui {
                 tui::run_tui(&mut profile, &mut providers_reg)?;
                 if tui::app::take_return_to_repl() {
                     start_repl(&mut profile, &mut providers_reg)?;
@@ -1301,6 +1329,7 @@ fn handle_slash_command(
             "💾 /memory       • Catatan memori proyek (.ctrl/MEMORY.md)",
             "🕒 /checkpoints  • Riwayat snapshot modifikasi berkas",
             "─── 📊 Session & Utilities ───────────────────────────────────",
+            "📊 /stats        • Pantau pemakaian resource real-time (RAM, CPU, storage)",
             "📊 /tokens       • Cek statistik token & progress bar context window",
             "📝 /save         • Simpan kode respon terakhir langsung ke file",
             "🧹 /reset        • Kosongkan riwayat percakapan (mulai sesi baru)",
@@ -1357,6 +1386,7 @@ fn handle_slash_command(
             println!("    \x1B[1;36m/tasks\x1B[0m \x1B[90m[sub]\x1B[0m        Kelola background tasks (list/view/cancel/wait/logs/clear)");
             println!("  \x1B[1;33mSession & Utilities\x1B[0m");
             println!("    \x1B[1;36m/\x1B[0m                   Buka menu interaktif (panah ↑/↓)");
+            println!("    \x1B[1;36m/stats\x1B[0m \x1B[90m[json|table]\x1B[0m Pantau pemakaian resource real-time (RAM, CPU, storage)");
             println!("    \x1B[1;36m/tokens\x1B[0m \x1B[90m[toggle]\x1B[0m    Lihat statistik token & grafik context");
             println!("    \x1B[1;36m/save\x1B[0m \x1B[90m[nama_file]\x1B[0m   Simpan hasil kode terakhir langsung ke file");
             println!(
@@ -2343,6 +2373,43 @@ fn handle_slash_command(
             }
             true
         }
+        "/stats" | "/metrics" | "/telemetry" | "/resources" => {
+            let sub = if parts.len() > 1 {
+                parts[1].to_lowercase()
+            } else {
+                String::new()
+            };
+
+            let ctrl_path = std::path::Path::new(".ctrl");
+            let ctrl_dir = if ctrl_path.exists() {
+                Some(ctrl_path)
+            } else {
+                None
+            };
+            let metrics = crate::telemetry::capture_metrics(ctrl_dir);
+
+            match sub.as_str() {
+                "" | "table" => {
+                    println!("\n{}\n", crate::telemetry::format_metrics_table(&metrics));
+                }
+                "json" | "--json" => match serde_json::to_string_pretty(&metrics) {
+                    Ok(json_str) => println!("{}", json_str),
+                    Err(e) => eprintln!("Error serializing metrics to JSON: {}", e),
+                },
+                "reset" => {
+                    let _ = crate::telemetry::capture_metrics(ctrl_dir);
+                    println!("\n✔ Telemetry baselines reset.\n");
+                }
+                "help" | "--help" | "-h" => {
+                    println!("\nGunakan: /stats [table|json|--json|reset]\n");
+                }
+                _ => {
+                    println!("\nSub-perintah tidak dikenal: '{}'\n", sub);
+                    println!("Gunakan: /stats [table|json|--json|reset]\n");
+                }
+            }
+            true
+        }
         "/tui" | "/gui" => {
             println!("\nBeralih ke mode TUI (Ratatui)...");
             let res = tui::run_tui(user_profile, providers_reg);
@@ -2958,6 +3025,39 @@ mod tests {
         let spec = tui_spec.unwrap();
         assert!(spec.aliases.contains(&"/gui"));
         assert!(spec.description.contains("Ratatui TUI"));
+    }
+
+    #[test]
+    fn test_command_specs_contains_stats_and_metrics() {
+        let stats_spec = COMMAND_SPECS.iter().find(|s| s.primary == "/stats");
+        assert!(stats_spec.is_some(), "/stats must be present in COMMAND_SPECS");
+        let spec = stats_spec.unwrap();
+        assert!(spec.aliases.contains(&"/metrics"));
+        assert!(spec.description.contains("resource real-time"));
+    }
+
+    #[test]
+    fn test_resolve_slash_command_stats_and_metrics() {
+        // Exact match for primary
+        let (exact, note) = resolve_slash_command("/stats");
+        assert_eq!(exact, "/stats");
+        assert!(note.is_none());
+
+        // Exact match with subcommands
+        let (exact_json, note) = resolve_slash_command("/stats --json");
+        assert_eq!(exact_json, "/stats --json");
+        assert!(note.is_none());
+
+        // Alias match
+        let (alias, note) = resolve_slash_command("/metrics");
+        assert_eq!(alias, "/metrics");
+        assert!(note.is_none());
+
+        // Prefix auto-expansion: "/stat" should expand to "/stats"
+        let (auto, note) = resolve_slash_command("/stat");
+        assert_eq!(auto, "/stats");
+        assert!(note.is_some());
+        assert!(note.unwrap().contains("/stats"));
     }
 
     #[test]

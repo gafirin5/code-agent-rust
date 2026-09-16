@@ -13,6 +13,7 @@ use crate::get_available_skills;
 use crate::tui::app::{App, ChatItemKind, FocusedPane, SidebarTab};
 
 pub fn render(frame: &mut Frame, app: &mut App) {
+    app.tick();
     let size = frame.area();
 
     // Main vertical layout: Header, Main Body (Chat + Sidebar), Input & Status
@@ -742,6 +743,72 @@ fn render_input(frame: &mut Frame, app: &App, area: Rect) {
     }
 }
 
+/// Formats a `ProcessMetrics` snapshot into a compact footer status string.
+///
+/// Output format: `RAM: X.X M (Pk Y.Y M) │ CPU: Z.Z% │ Th: N`
+/// When metrics are unavailable (`None`), returns fallback: `RAM: -- │ CPU: -- │ Th: --`.
+pub fn format_footer_telemetry(metrics: Option<&crate::telemetry::ProcessMetrics>) -> String {
+    match metrics {
+        Some(m) => {
+            let rss_mb = m.memory.rss_bytes as f64 / (1024.0 * 1024.0);
+            let peak_mb = m.memory.peak_rss_bytes as f64 / (1024.0 * 1024.0);
+            format!(
+                "RAM: {:.1} M (Pk {:.1} M) │ CPU: {:.1}% │ Th: {}",
+                rss_mb, peak_mb, m.cpu.process_pct, m.threads.active_threads
+            )
+        }
+        None => "RAM: -- │ CPU: -- │ Th: --".to_string(),
+    }
+}
+
+/// Renders styled Ratatui Spans for the footer telemetry indicator.
+pub fn render_footer_telemetry_line(
+    metrics: Option<&crate::telemetry::ProcessMetrics>,
+) -> Line<'static> {
+    match metrics {
+        Some(m) => {
+            let rss_mb = m.memory.rss_bytes as f64 / (1024.0 * 1024.0);
+            let peak_mb = m.memory.peak_rss_bytes as f64 / (1024.0 * 1024.0);
+            let ram_alert = rss_mb > 50.0;
+            let cpu_alert = m.cpu.process_pct > 80.0;
+
+            let ram_style = if ram_alert {
+                Style::default()
+                    .fg(Color::LightYellow)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(Color::LightCyan)
+            };
+
+            let cpu_style = if cpu_alert {
+                Style::default()
+                    .fg(Color::LightRed)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(Color::LightCyan)
+            };
+
+            let dim_style = Style::default().fg(Color::DarkGray);
+            let val_style = Style::default().fg(Color::LightCyan);
+
+            Line::from(vec![
+                Span::styled("RAM: ", dim_style),
+                Span::styled(format!("{:.1} M", rss_mb), ram_style),
+                Span::styled(" (Pk ", dim_style),
+                Span::styled(format!("{:.1} M", peak_mb), ram_style),
+                Span::styled(") │ CPU: ", dim_style),
+                Span::styled(format!("{:.1}%", m.cpu.process_pct), cpu_style),
+                Span::styled(" │ Th: ", dim_style),
+                Span::styled(format!("{}", m.threads.active_threads), val_style),
+            ])
+        }
+        None => Line::from(vec![Span::styled(
+            "RAM: -- │ CPU: -- │ Th: --",
+            Style::default().fg(Color::DarkGray),
+        )]),
+    }
+}
+
 fn render_footer(frame: &mut Frame, app: &App, area: Rect) {
     let status_text = if let Some((msg, _)) = &app.status_message {
         Span::styled(
@@ -751,7 +818,10 @@ fn render_footer(frame: &mut Frame, app: &App, area: Rect) {
                 .add_modifier(Modifier::BOLD),
         )
     } else {
-        Span::styled(" [Tab] Fokus  [Enter] Kirim  [F1-F4] Tabs  [F5/:cli] REPL  [Esc] Batal  [Ctrl+C] Keluar", Style::default().fg(Color::DarkGray))
+        Span::styled(
+            " [Tab] Fokus  [Enter] Kirim  [Esc] Batal",
+            Style::default().fg(Color::DarkGray),
+        )
     };
 
     let tokens_text = Span::styled(
@@ -764,14 +834,21 @@ fn render_footer(frame: &mut Frame, app: &App, area: Rect) {
 
     let layout = Layout::default()
         .direction(Direction::Horizontal)
-        .constraints([Constraint::Min(20), Constraint::Length(45)])
+        .constraints([
+            Constraint::Min(25),
+            Constraint::Length(38),
+            Constraint::Length(35),
+        ])
         .split(area);
 
     let status_para = Paragraph::new(Line::from(status_text));
+    let telemetry_para = Paragraph::new(render_footer_telemetry_line(app.metrics.as_ref()))
+        .alignment(Alignment::Center);
     let token_para = Paragraph::new(Line::from(tokens_text)).alignment(Alignment::Right);
 
     frame.render_widget(status_para, layout[0]);
-    frame.render_widget(token_para, layout[1]);
+    frame.render_widget(telemetry_para, layout[1]);
+    frame.render_widget(token_para, layout[2]);
 }
 
 fn render_slash_popup(frame: &mut Frame, app: &App, input_area: Rect) {
