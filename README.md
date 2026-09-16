@@ -2,11 +2,12 @@
 
 # 🤖 ctrl-cli
 
-**Asisten Coding AI Ringan di Terminal — 100% Rust Murni**
+**Asisten Coding AI Ringan di Terminal & Orkestrator Otonom — 100% Rust Murni**
 
 [![Version](https://img.shields.io/badge/Version-0.3.0-blue)]()
 [![Rust](https://img.shields.io/badge/Built%20with-Rust-orange?logo=rust)](https://www.rust-lang.org/)
 [![Binary Size](https://img.shields.io/badge/Binary-~1.8%20MB-brightgreen)]()
+[![RAM Idle](https://img.shields.io/badge/RAM%20Idle-<25%20MB-brightgreen)]()
 [![Tests](https://img.shields.io/badge/Tests-320%2B%20Passing-success)]()
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![OpenAI Compatible](https://img.shields.io/badge/API-OpenAI%20Compatible-412991?logo=openai)]()
@@ -17,48 +18,71 @@
 
 ---
 
+## 📑 Daftar Isi (Table of Contents)
+- [🇮🇩 Bahasa Indonesia](#-bahasa-indonesia)
+  - [💡 1. Apa itu ctrl-cli?](#-1-apa-itu-ctrl-cli)
+  - [⚡ 2. Panduan Cepat Memulai (3 Menit)](#-2-panduan-cepat-memulai-3-menit)
+  - [🎬 3. Contoh Pemakaian Sehari-hari](#-3-contoh-pemakaian-sehari-hari)
+  - [🎮 4. Pilihan 4 Mode Tampilan](#-4-pilihan-4-mode-tampilan)
+  - [⌨️ 5. Menu Perintah Cepat (Slash Commands)](#️-5-menu-perintah-cepat-slash-commands)
+  - [🎯 6. Persona Spesialis AI (/skill)](#-6-persona-spesialis-ai-skill)
+  - [🧠 7. Penjelasan Lengkap Cara Kerja Agent (ReAct Loop)](#-7-penjelasan-lengkap-cara-kerja-agent-react-loop)
+  - [🛠️ 8. Daftar Lengkap 15 Built-in Tools](#️-8-daftar-lengkap-15-built-in-tools)
+  - [👥 9. Konkurensi & Subagent Background Tasks](#-9-konkurensi--subagent-background-tasks)
+  - [🛡️ 10. Sistem Keamanan, Izin & Auto-Snapshot Sandbox](#️-10-sistem-keamanan-izin--auto-snapshot-sandbox)
+  - [🖥️ 11. Panduan Lengkap TUI Fullscreen & Keybindings](#-11-panduan-lengkap-tui-fullscreen--keybindings)
+  - [🌐 12. Mode Web Dashboard & REST API](#-12-mode-web-dashboard--rest-api)
+  - [⚙️ 13. Konfigurasi Lanjutan & Profil Pengguna](#️-13-konfigurasi-lanjutan--profil-pengguna)
+  - [📊 14. Metrik Kinerja & Efisiensi Sistem](#-14-metrik-kinerja--efisiensi-sistem)
+  - [📂 15. Struktur Arsitektur Kode](#-15-struktur-arsitektur-kode)
+  - [📚 16. Pusat Dokumentasi Lengkap](#-16-pusat-dokumentasi-lengkap)
+- [🇬🇧 English Overview](#-english)
+- [🇨🇳 中文概述](#-中文)
+
+---
+
 ## 🇮🇩 Bahasa Indonesia
 
-### 💡 Apa itu ctrl-cli?
+### 💡 1. Apa itu ctrl-cli?
 
 Bayangkan kamu memiliki **rekan programmer senior di terminal kamu**. Kamu cukup mengetik apa yang ingin dibuat atau diperbaiki menggunakan bahasa sehari-hari, dan `ctrl-cli` akan membaca file proyek, menulis kode, mengecek apakah ada error kompilasi, dan langsung memperbaikinya sendiri!
 
-Berbeda dengan aplikasi AI lain yang berat dan lambat, `ctrl-cli` dirancang **sangat ringan (~1.8 MB)** dan **super kencang** karena dibangun 100% menggunakan bahasa pemrograman **Rust murni** tanpa embel-embel framework web yang boros RAM.
+Berbeda dengan aplikasi AI lain yang berat dan lambat (seperti aplikasi GUI berbasis Electron yang memakan ratusan MB RAM), `ctrl-cli` dirancang **sangat hemat (~1.8 MB binary, < 25 MB RAM)** dan **super responsif** karena dibangun 100% menggunakan bahasa pemrograman **Rust murni**.
 
 #### ✨ Keunggulan Utama:
-* 💬 **Chat Interaktif di Terminal**: Berdiskusi dan meminta bantuan kode langsung dari terminal/konsol favoritmu.
-* 🛠️ **Bisa Bekerja Mandiri**: Mampu membaca isi folder, mengedit file secara presisi, dan menjalankan terminal.
-* 🩺 **Otomatis Benerin Kode (Self-Healing)**: Jika kode yang dibuat mengalami error saat dikompilasi (`cargo check`, python, tsc), agent akan membaca pesan error tersebut dan otomatis memperbaikinya saat itu juga!
-* 🛡️ **Anti-Panik (`/undo`)**: Setiap sebelum file diubah, sistem otomatis menyimpan salinan cadangan (*checkpoint*). Jika kamu tidak puas dengan hasilnya, cukup ketik `/undo` untuk kembali ke kondisi awal!
+* 💬 **Chat Interaktif di Terminal**: Berdiskusi dan meminta bantuan kode langsung dari konsol favoritmu.
+* 🛠️ **Bisa Bekerja Mandiri**: Membaca susunan folder, mengedit file secara presisi, dan menjalankan terminal.
+* 🩺 **Otomatis Benerin Kode (Self-Healing)**: Jika kode mengalami error saat dikompilasi (`cargo check`, python, tsc), agent menangkap pesan error tersebut dan langsung memperbaikinya seketika!
+* 🛡️ **Anti-Panik (`/undo`)**: Setiap sebelum file diubah, sistem otomatis menyimpan salinan cadangan (*checkpoint*). Jika kamu tidak puas dengan hasilnya, cukup ketik `/undo` untuk kembali ke kondisi semula!
 * 🆓 **Bisa Gratis & Offline**: Mendukung provider gratisan super cepat (Groq), model lokal offline tanpa kuota internet (Ollama), maupun model komersial (OpenAI, DeepSeek, Gemini).
 
 ---
 
-### ⚡ 3 Langkah Cepat Memulai (Quick Start)
+### ⚡ 2. Panduan Cepat Memulai (3 Menit)
 
-#### 1. Download & Masuk ke Folder Proyek
+#### Langkah 1: Download & Masuk Folder Proyek
 Pastikan di komputermu sudah terpasang [Rust](https://rustup.rs/) (versi 2021 atau lebih baru):
 ```bash
 git clone https://github.com/gafirin5/code-agent-rust.git
 cd code-agent-rust
 ```
 
-#### 2. Siapkan File Konfigurasi `.env`
+#### Langkah 2: Buat File Konfigurasi `.env`
 Salin template konfigurasi:
 ```bash
-# Untuk Windows (CMD / PowerShell):
+# Windows (CMD / PowerShell):
 copy .env.example .env
 
-# Untuk Linux / macOS:
+# Linux / macOS:
 cp .env.example .env
 ```
 
-Buka file `.env` dengan editor teks favoritmu, lalu pilih salah satu konfigurasi di bawah ini:
+Buka `.env` dan pilih salah satu konfigurasi penyedia AI berikut:
 
 > 💡 **Mau coba gratis tanpa ribet?**
-> * **Opsi A: Groq (Gratis & Super Cepat — Sangat Direkomendasikan)**
->   1. Buka [console.groq.com/keys](https://console.groq.com/keys) dan buat akun (gratis, tanpa kartu kredit).
->   2. Buat API Key baru, lalu isi file `.env`:
+> * **Opsi A: Groq (Rekomendasi Gratis & Super Cepat — Tanpa Kartu Kredit)**
+>   1. Buka [console.groq.com/keys](https://console.groq.com/keys) lalu buat API Key gratis.
+>   2. Isi di `.env`:
 >   ```env
 >   AI_API_KEY=gsk_xxxxxxxxxxxxxxxxxxxxxx
 >   AI_BASE_URL=https://api.groq.com/openai/v1
@@ -67,7 +91,7 @@ Buka file `.env` dengan editor teks favoritmu, lalu pilih salah satu konfigurasi
 >
 > * **Opsi B: Ollama (100% Offline, Privat & Gratis Tanpa Internet)**
 >   1. Pasang [Ollama](https://ollama.com/) dan unduh model coding: `ollama run qwen2.5-coder:7b`
->   2. Isi file `.env`:
+>   2. Isi di `.env`:
 >   ```env
 >   AI_API_KEY=ollama
 >   AI_BASE_URL=http://localhost:11434/v1
@@ -81,21 +105,21 @@ Buka file `.env` dengan editor teks favoritmu, lalu pilih salah satu konfigurasi
 >   AI_MODEL=gpt-4o-mini                   # atau deepseek-chat
 >   ```
 
-#### 3. Jalankan!
+#### Langkah 3: Jalankan!
 ```bash
 cargo run
 ```
 *Selesai! Terminal siap diajak ngobrol dan coding bersama.* 🎉
 
-> 💡 **Tips Tambahan**: Ingin bisa memanggil `ctrl-cli` dari folder mana saja tanpa harus mengetik `cargo run`? Cukup jalankan perintah:
+> 💡 **Tips Pasang Permanen**: Ingin bisa mengetik `ctrl-cli` dari folder mana saja tanpa `cargo run`?
 > ```bash
 > cargo install --path . --force
 > ```
-> Setelah itu, kamu bisa cukup mengetik `ctrl-cli` di terminal mana pun!
+> Sekarang cukup ketik `ctrl-cli` di terminal mana pun!
 
 ---
 
-### 🎬 Contoh Pemakaian Nyata
+### 🎬 3. Contoh Pemakaian Sehari-hari
 
 Berikut gambaran alur saat kamu menggunakan `ctrl-cli`:
 
@@ -123,14 +147,14 @@ Berikut gambaran alur saat kamu menggunakan `ctrl-cli`:
 
 ---
 
-### 🎮 4 Pilihan Mode Tampilan (Sesuai Gaya Kamu)
+### 🎮 4. Pilihan 4 Mode Tampilan
 
-`ctrl-cli` menyediakan 4 cara penggunaan yang fleksibel:
+`ctrl-cli` menyediakan 4 cara penggunaan yang fleksibel sesuai kebutuhanmu:
 
 | Mode | Cara Menjalankan | Kapan Cocok Digunakan? |
 | :--- | :--- | :--- |
 | **1. 💬 Chat Terminal (REPL)** | `cargo run` (atau `ctrl-cli`) | **Default & Paling Santai.** Mengobrol santai layaknya di ChatGPT, langsung di terminalmu. |
-| **2. 🖥️ Visual Terminal (TUI)** | `ctrl-cli-tui` (atau ketik `/tui`) | **Penggemar Vim / Htop.** Tampilan layar penuh dengan panel chat, daftar task, dan skill selector. |
+| **2. 🖥️ Visual Terminal (TUI)** | `ctrl-cli-tui` (atau ketik `/tui`) | **Penggemar Vim / Htop.** Tampilan layar penuh dengan panel chat, monitor task latar belakang, dan skill selector. |
 | **3. 🌐 Web Browser** | `cargo run -- serve` | **Tampilan Grafis Browser.** Buka `http://127.0.0.1:3000` di Chrome/Firefox untuk memantau proses secara visual. |
 | **4. ⚡ Sekali Jalan (One-Shot)** | `cargo run -- generate "..."` | **Scripting / Automasi.** Menghasilkan kode atau jawaban instan langsung ke file tanpa masuk sesi chat. |
 
@@ -145,66 +169,273 @@ cargo run -- generate -o salam.py "buat script python untuk menyapa pengguna ses
 
 ---
 
-### ⌨️ Perintah Penting (Slash Commands)
+### ⌨️ 5. Menu Perintah Cepat (Slash Commands)
 
 Saat berada di dalam mode chat (REPL), ketik `/` lalu gunakan tombol panah keyboard `↑` / `↓` untuk memilih perintah:
 
-| Perintah | Apa Fungsinya? |
+| Perintah | Fungsi & Kegunaan |
 | :--- | :--- |
-| **/help** | ❓ Menampilkan daftar bantuan seluruh perintah. |
+| **/help** | ❓ Menampilkan panduan bantuan lengkap seluruh perintah. |
 | **/undo** | ⏪ **Batalkan perubahan file terakhir** (kembali ke snapshot sebelum diedit). |
-| **/diff** | 🔍 Lihat perbandingan baris kode yang baru saja dimodifikasi. |
+| **/diff** | 🔍 Tampilkan perbandingan baris kode yang baru saja dimodifikasi. |
 | **/check** | 🩺 Jalankan compiler / linter untuk memastikan tidak ada syntax error. |
 | **/tui** | 🖥️ Pindah seketika ke tampilan antarmuka visual layar penuh (*Fullscreen TUI*). |
 | **/model** | 🔄 Ganti model AI yang sedang aktif (misal beralih ke DeepSeek atau GPT-4o). |
 | **/skill** | 🎭 Aktifkan persona spesialis (Rust Expert, Reviewer, Debugger, dll.). |
-| **/tokens** | 📊 Cek kapasitas memori obrolan dan konsumsi token saat ini. |
+| **/tokens** | 📊 Cek kapasitas memori percakapan dan konsumsi token saat ini. |
 | **/compact** | 🧹 Ringkas riwayat obrolan panjang untuk menghemat pemakaian token. |
 | **/clear** | 🧼 Bersihkan tampilan layar terminal. |
 | **/exit** | 🚪 Keluar dari aplikasi. |
 
-> 💡 **Pintasan Pindah Mode**:
-> * Dari **Chat ➔ TUI**: Ketik `/tui` lalu Enter.
-> * Dari **TUI ➔ Chat**: Tekan tombol **`F5`** di keyboard.
+---
+
+### 🎯 6. Persona Spesialis AI (`/skill`)
+
+Kamu bisa mengarahkan fokus keahlian AI dengan mengetik `/skill <nama>`:
+
+| Skill | Fokus & Keahlian Khusus |
+| :--- | :--- |
+| `rust-expert` | 🦀 Kode Rust idiomatik, zero-cost abstractions, konkurensi thread-safe, dan memori aman. |
+| `code-reviewer` | 🔍 Audit kode untuk mencari celah bug, keamanan (OWASP), dan saran arsitektur bersih. |
+| `web-frontend` | 🎨 Desain antarmuka web modern, responsif, dan aksesibel (HTML, Tailwind CSS, JS). |
+| `api-architect` | 🏗️ Perancangan REST/GraphQL API, skema basis data, dan arsitektur otentikasi JWT/OAuth. |
+| `debugger` | 🐞 Analisis mendalam terhadap stack trace error, memory leak, dan pelacakan akar masalah bug. |
+| `test-engineer` | 🧪 Pembuatan unit test, integration test komprehensif, dan skenario pengujian TDD. |
+| `refactor` | 🧹 Pembersihan kode kusut (*code smell*), penerapan SOLID & DRY tanpa merusak fungsionalitas. |
 
 ---
 
-### 🎯 Pilihan Keahlian AI (`/skill`)
+### 🧠 7. Penjelasan Lengkap Cara Kerja Agent (ReAct Loop)
 
-Kamu bisa mengarahkan fokus AI sesuai tugas yang sedang dikerjakan dengan mengetik `/skill <nama>`:
+Bagaimana `ctrl-cli` bisa berpikir dan bekerja secara otonom? Sistem menggunakan arsitektur **ReAct (Reasoning + Acting)** yang diperkaya dengan verifikasi kompilasi otomatis (*Self-Healing*).
 
-* 🦀 **`rust-expert`**: Ahli bahasa Rust, performa tinggi, zero-cost abstractions, dan memori aman.
-* 🔍 **`code-reviewer`**: Mengaudit kode untuk mencari celah bug, keamanan, dan saran arsitektur bersih.
-* 🎨 **`web-frontend`**: Ahli pembuatan tampilan antarmuka web modern (HTML, Tailwind CSS, JavaScript).
-* 🏗️ **`api-architect`**: Ahli mendesain REST API, skema database, dan sistem otentikasi.
-* 🐞 **`debugger`**: Menganalisis error stack trace dan menemukan akar penyebab masalah (*root cause*).
-* 🧪 **`test-engineer`**: Menulis unit test komprehensif dan skenario pengujian TDD.
-* 🧹 **`refactor`**: Merapikan kode yang berantakan agar mudah dibaca dan dirawat (*Clean Code*).
+```text
+  ┌────────────────────────────────────────────────────────┐
+  │                 Instruksi Pengguna                     │
+  └───────────────────────────┬────────────────────────────┘
+                              │
+                              ▼
+  ┌────────────────────────────────────────────────────────┐
+  │ 1. OBSERVASI & KONTEKS (Read Files, History, Memory)   │
+  └───────────────────────────┬────────────────────────────┘
+                              │
+                              ▼
+  ┌────────────────────────────────────────────────────────┐
+  │ 2. REASONING (Model menganalisis & merencanakan tugas) │
+  └───────────────────────────┬────────────────────────────┘
+                              │
+                              ▼
+  ┌────────────────────────────────────────────────────────┐
+  │ 3. TOOL EXECUTION (Menulis/Mengedit file, Shell, Web)  │
+  └───────────────────────────┬────────────────────────────┘
+                              │
+                              ▼
+  ┌────────────────────────────────────────────────────────┐
+  │ 4. SELF-HEALING CHECK (cargo check / compiler test)    │
+  └─────────────┬────────────────────────────┬─────────────┘
+                │ Ada Error Kompilasi        │ Sukses 100%
+                ▼                            ▼
+  ┌───────────────────────────┐  ┌─────────────────────────┐
+  │ Perbaiki Kode Otomatis    │  │ Berikan Hasil Akhir     │
+  │ (Ulangi ke Langkah 2)     │  │ ke Pengguna             │
+  └───────────────────────────┘  └─────────────────────────┘
+```
+
+1. **Observasi**: Agent memeriksa lingkungan kerja (membaca file, struktur folder, atau catatan memori di `.ctrl/MEMORY.md`).
+2. **Penalaran (Thought)**: Model menyusun rencana langkah demi langkah untuk menyelesaikan tugas.
+3. **Aksi (Tool Call)**: Agent memanggil salah satu dari 15 perkakas bawaan (misal mengedit fungsi tertentu pada file).
+4. **Validasi Mandiri (Self-Healing)**: Setelah memodifikasi kode, sistem secara otomatis menjalankan verifikasi compiler. Jika ada error kompilasi, error tersebut dikirim kembali ke agen untuk segera diperbaiki sebelum melapor selesai kepada pengguna!
 
 ---
 
-### 🛡️ Fitur Keamanan: Bebas Khawatir dari Kesalahan Kode!
+### 🛠️ 8. Daftar Lengkap 15 Built-in Tools
 
-Banyak developer khawatir AI akan merusak file proyek mereka. `ctrl-cli` memiliki sistem pengaman berlapis:
-1. **Auto-Snapshot & Rollback**: Setiap kali agent akan mengedit file, salinan cadangan dibuat di `.ctrl/snapshots/`. Salah edit? Ketik `/undo`, dan file kembali seperti semula seketika.
-2. **Konfirmasi Izin (`/permissions`)**:
-   - `Ask` *(Bawaan)*: Agent akan selalu meminta izin `[Y/n]` sebelum mengubah file atau menjalankan perintah shell.
-   - `AutoApprove`: Mode otomatis penuh jika kamu ingin agent bekerja mandiri tanpa sering bertanya.
-   - `ReadOnly`: Mode 100% aman, agent hanya boleh membaca dan dilarang mengubah file apa pun.
-3. **Self-Healing Loop**: Jika hasil kode menghasilkan error kompilasi, `ctrl-cli` akan membaca pesan error tersebut dan otomatis memperbaikinya sampai berhasil dikompilasi dengan baik.
+`ctrl-cli` dibekali 15 perkakas (*tools*) otonom yang dapat dipanggil oleh AI sesuai kebutuhan:
+
+| Perkakas (*Tool*) | Kegunaan & Spesifikasi | Tingkat Izin |
+| :--- | :--- | :--- |
+| **`read_file`** | Membaca isi file dengan rentang baris (*offset & limit*) agar hemat token. | Aman (Auto) |
+| **`write_file`** | Membuat file baru secara atomik lengkap dengan pembuatan folder induk otomatis. | Menulis (Checkpoint) |
+| **`edit_file`** | Mengganti blok teks secara presisi tinggi (*surgical replacement*) tanpa merusak baris lain. | Menulis (Checkpoint) |
+| **`glob_files`** | Mencari lokasi file di seluruh proyek menggunakan pola pencocokan glob (misal `**/*.rs`). | Aman (Auto) |
+| **`grep_files`** | Mencari kata kunci atau ekspresi reguler (regex) di seluruh isi file proyek. | Aman (Auto) |
+| **`shell`** | Menjalankan perintah terminal sistem (PowerShell / Bash) dengan batas waktu (*timeout*). | Eksekusi (Konfirmasi) |
+| **`web_search`** | Mencari solusi, dokumentasi, atau pustaka terbaru menggunakan DuckDuckGo. | Aman (Auto) |
+| **`web_fetch`** | Mengambil isi halaman web dan mengubahnya menjadi format Markdown yang bersih. | Aman (Auto) |
+| **`subagent`** | Meluncurkan subagent pekerja di latar belakang untuk menyelesaikan riset/tugas berat. | Eksekusi (Isolasi) |
+| **`task_manage`** | Memantau status, membaca log, atau membatalkan subagent task yang berjalan. | Aman (Auto) |
+| **`manage_memory`** | Membaca atau menyimpan catatan permanen proyek di `.ctrl/MEMORY.md`. | Menulis |
+| **`mcp`** | Berkomunikasi dengan server eksternal melalui protokol *Model Context Protocol* (MCP). | Tergantung Server |
+| **`self_heal`** | Menjalankan compiler/linter untuk menguji integritas sintaksis kode secara mandiri. | Aman (Auto) |
+| **`create_checkpoint`** | Membuat cadangan snapshot manual dari file kerja. | Aman (Internal) |
+| **`restore_checkpoint`**| Mengembalikan kondisi file ke snapshot cadangan tertentu (`/undo`). | Menulis (Rollback) |
 
 ---
 
-### 📚 Dokumentasi Teknis Lengkap
+### 👥 9. Konkurensi & Subagent Background Tasks
 
-Ingin mempelajari arsitektur internal atau konfigurasi lanjutan? Kunjungi folder [**`docs/`**](./docs/README.md):
-* 📝 [Catatan Rilis & Pembaruan (`UPDATE_NOTES.md`)](./docs/UPDATE_NOTES.md)
-* 📊 [Hasil Uji Performa & Benchmark (`PERFORMANCE.md`)](./docs/PERFORMANCE.md)
-* ⚙️ [Panduan Konfigurasi Lengkap (`CONFIGURATION.md`)](./docs/CONFIGURATION.md)
-* 🏗️ [Arsitektur Sistem & Threading (`ARCHITECTURE.md`)](./docs/ARCHITECTURE.md)
-* 🤖 [Buku Panduan AI Agent (`AI_AGENT_GUIDE.md`)](./docs/AI_AGENT_GUIDE.md)
-* 🛠️ [Referensi 15+ Built-in Tools (`TOOLS_REFERENCE.md`)](./docs/TOOLS_REFERENCE.md)
-* 🗺️ [Roadmap Fitur Masa Depan (`ROADMAP.md`)](./docs/ROADMAP.md)
+Saat kamu meminta tugas besar (seperti *"Riset dokumentasi library X dan buatkan arsitektur modulnya"*), `ctrl-cli` tidak membekukan terminal. Sistem memanfaatkan konkurensi murni Rust:
+
+1. **Background Worker Threads**: Setiap subagent berjalan pada `std::thread` mandiri dengan sinkronisasi atomik aman (`Arc<RwLock<...>>`).
+2. **Isolasi Log Penuh (`OutputSink::Buffered`)**: Output dari subagent disimpan ke dalam buffer memori terpisah, sehingga layar percakapan utamamu tidak akan tertimpa atau berantakan saat subagent sedang bekerja.
+3. **Notifikasi Antar-Giliran (*Inter-turn Notifications*)**: Saat kamu sedang mengetik atau menyelesaikan satu prompt, sistem secara otomatis memberi notifikasi jika subagent di latar belakang telah menyelesaikan tugasnya.
+4. **Monitoring Real-Time**: Status subagent dapat dipantau langsung lewat tombol **`F2`** pada mode TUI atau melalui halaman Web Dashboard.
+
+---
+
+### 🛡️ 10. Sistem Keamanan, Izin & Auto-Snapshot Sandbox
+
+Keamanan kode sumber kamu adalah prioritas utama di `ctrl-cli`:
+
+#### 1. Shadow Snapshot & Rollback Atomik (`/undo`)
+* Setiap kali agent hendak memodifikasi file (melalui `write_file` atau `edit_file`), sistem terlebih dahulu membuat salinan snapshot di folder cadangan `.ctrl/snapshots/`.
+* Snapshot mencakup hash checksum dan stempel waktu (*timestamp*).
+* Jika kamu mengetik `/undo`, file target akan dipulihkan seketika ke keadaan sebelum diedit.
+* Ketik `/diff` untuk melihat perbedaan baris berwarna secara presisi (*unified diff*).
+
+#### 2. Tiga Tingkat Izin Keamanan (`/permissions`)
+* **`Ask` (Mode Bawaan)**: Agent akan selalu meminta konfirmasi `[Y/n]` sebelum mengeksekusi perintah shell atau mengubah berkas penting.
+* **`AutoApprove`**: Untuk developer yang ingin agent bekerja cepat tanpa henti (misal dalam skrip automasi CI/CD).
+* **`ReadOnly`**: Mode audit aman 100%, agent hanya diizinkan membaca file dan dilarang mengubah apa pun.
+
+---
+
+### 🖥️ 11. Panduan Lengkap TUI Fullscreen & Keybindings
+
+Mode TUI (*Terminal User Interface*) menghadirkan pengalaman antarmuka visual penuh ala *Vim/Neovim/Htop* berbasis pustaka [Ratatui](https://ratatui.rs/).
+
+#### Cara Membuka TUI:
+```bash
+# Langsung dari terminal:
+ctrl-cli-tui
+
+# Atau dari dalam REPL:
+Ketik /tui lalu tekan Enter
+```
+
+#### 🎮 Daftar Pintasan Keyboard (Keybindings):
+* **`Tab` / `Shift + Tab`**: Berpindah fokus antar panel (**Riwayat Chat** ↔ **Input Teks** ↔ **Sidebar Status**).
+* **`F1`**: Membuka panel panduan bantuan (*Help*).
+* **`F2`**: Membuka panel **Tasks** (memantau subagent di background; tekan `c` untuk batalkan, `x` untuk membersihkan).
+* **`F3`**: Membuka panel **Skills** (gunakan panah `↑`/`↓` dan `Enter` untuk memilih persona).
+* **`F4`**: Membuka panel **Model & Provider** (ganti model AI langsung dari sidebar).
+* **`F5`**: 🔄 **Beralih kembali ke mode REPL biasa** tanpa memutus sesi percakapan.
+* **`Esc`**: Membatalkan eksekusi yang sedang berlangsung / menutup popup autocomplete.
+* **`Ctrl + L`**: Membersihkan layar obrolan.
+* **`Ctrl + Q`** atau **`Ctrl + C`**: Keluar dari aplikasi.
+* **Scroll Mouse**: Menggulir panel pesan ke atas dan ke bawah secara halus.
+
+---
+
+### 🌐 12. Mode Web Dashboard & REST API
+
+Jika kamu lebih menyukai tampilan grafis visual di web browser:
+```bash
+ctrl-cli serve --port 3000
+```
+Buka browser di **`http://127.0.0.1:3000`**.
+
+#### Fitur Web Dashboard:
+* **Antarmuka Chat Grafis**: Mengetik dan membaca respons AI dengan syntax highlighting kode yang indah.
+* **Task Board**: Memantau daftar subagent yang sedang berjalan, waktu eksekusi, dan konsumsi resource.
+* **REST & SSE Endpoints**:
+  * `GET /api/health` — Pengecekan status server.
+  * `GET /api/tasks` — Mengambil daftar status task subagent.
+  * `POST /api/chat` — Mengirim instruksi baru ke agent.
+  * `GET /api/metrics` — Menampilkan metrik performa sistem (CPU, RAM, thread active).
+
+---
+
+### ⚙️ 13. Konfigurasi Lanjutan & Profil Pengguna
+
+#### 1. Profil Personalisasi (`~/.ctrl-cli/profile.json`)
+Agar AI selalu menyesuaikan diri dengan gaya coding dan bahasa yang kamu inginkan, buat atau edit file konfigurasi profil di `~/.ctrl-cli/profile.json`:
+```json
+{
+  "name": "Budi",
+  "tech_stack": ["Rust", "Python", "TypeScript"],
+  "response_language": "Bahasa Indonesia",
+  "coding_style": "Tulis kode yang bersih, idiomatik, beri penjelasan singkat, dan sertakan unit test."
+}
+```
+
+#### 2. Memori Jangka Panjang Proyek (`.ctrl/MEMORY.md`)
+Kamu bisa menuliskan aturan khusus proyek pada file `.ctrl/MEMORY.md` di folder proyekmu (misal: aturan arsitektur, panduan database, atau konvensi penamaan). Agent akan membaca berkas ini secara otomatis di setiap sesi percakapan.
+
+#### 3. Integrasi MCP (Model Context Protocol)
+`ctrl-cli` mendukung integrasi perkakas eksternal via MCP. Cukup definisikan server MCP pada berkas `.ctrl/mcp.json`:
+```json
+{
+  "mcpServers": {
+    "github": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-github"],
+      "env": { "GITHUB_PERSONAL_ACCESS_TOKEN": "ghp_xxxx" }
+    }
+  }
+}
+```
+
+---
+
+### 📊 14. Metrik Kinerja & Efisiensi Sistem
+
+Berdasarkan pengujian empiris performa (lihat dokumen lengkap [docs/PERFORMANCE.md](./docs/PERFORMANCE.md)):
+
+| Parameter Metrik | `ctrl-cli` (Rust Murni) | Tool AI Berbasis Electron/Node |
+| :--- | :--- | :--- |
+| **Ukuran File Biner** | **~1.8 MB** | ~150 MB – 300 MB |
+| **Konsumsi RAM (Idle)** | **< 25 MB** | 200 MB – 800 MB |
+| **Konsumsi RAM (Puncak)** | **< 60 MB** | 600 MB – 1.5 GB |
+| **Waktu Startup Terminal** | **< 15 ms** | 1.2 s – 3.5 s |
+| **Keamanan Memori** | **100% Memory-Safe** (Rust ownership) | Rawan garbage collection spikes |
+
+---
+
+### 📂 15. Struktur Arsitektur Kode
+
+```text
+code-agent-rust/
+├── Cargo.toml                <-- Metadata paket & dependensi Rust (edisi 2021)
+├── src/
+│   ├── main.rs               <-- Titik masuk aplikasi, CLI routing, & arg parser
+│   ├── types.rs              <-- Definisi tipe data pesan, tool call, & konfigurasi
+│   ├── server.rs             <-- Server HTTP REST & SSE untuk Web Dashboard
+│   ├── agent/                <-- Inti orkestrasi ReAct loop
+│   │   ├── orchestrator.rs   <-- Manajemen siklus eksekusi agen utama
+│   │   ├── provider.rs       <-- Klien HTTP ureq kompatibel OpenAI API
+│   │   ├── subagent.rs       <-- Manajemen worker thread subagent
+│   │   ├── checkpoint.rs     <-- Sistem auto-snapshot file & /undo
+│   │   ├── permissions.rs    <-- Pintu izin akses (Ask/AutoApprove/ReadOnly)
+│   │   └── memory.rs         <-- Manajemen memori persisten .ctrl/MEMORY.md
+│   ├── tools/                <-- Implementasi 15 perkakas bawaan
+│   │   ├── filesystem.rs     <-- Operasi berkas (read, write, edit, glob, grep)
+│   │   ├── shell.rs          <-- Eksekutor terminal aman dengan timeout
+│   │   ├── web.rs            <-- Integrasi DuckDuckGo & web fetcher
+│   │   ├── self_heal.rs      <-- Evaluator compiler (cargo check, py, ts)
+│   │   └── mcp.rs            <-- Klien Model Context Protocol
+│   ├── tui/                  <-- Antarmuka terminal fullscreen Ratatui
+│   │   ├── app.rs            <-- State machine dan state loop TUI
+│   │   └── ui.rs             <-- Render tata letak panel visual
+│   ├── telemetry/            <-- Pemantauan CPU, RAM, & resource sistem
+│   └── bin/
+│       └── ctrl-cli-tui.rs   <-- File biner mandiri mode TUI
+├── tests/                    <-- 320+ unit test, integration test, & stress test
+└── docs/                     <-- Dokumentasi teknis mendalam
+```
+
+---
+
+### 📚 16. Pusat Dokumentasi Lengkap
+
+Ingin mempelajari dokumentasi spesifik untuk topik tertentu? Silakan kunjungi:
+* 📝 [**Catatan Update & Rilis (`docs/UPDATE_NOTES.md`)**](./docs/UPDATE_NOTES.md)
+* 📊 [**Hasil Uji Performa Komprehensif (`docs/PERFORMANCE.md`)**](./docs/PERFORMANCE.md)
+* ⚙️ [**Panduan Konfigurasi Lengkap (`docs/CONFIGURATION.md`)**](./docs/CONFIGURATION.md)
+* 🏗️ [**Arsitektur Sistem & Concurrency (`docs/ARCHITECTURE.md`)**](./docs/ARCHITECTURE.md)
+* 🤖 [**Buku Panduan AI Agent (`docs/AI_AGENT_GUIDE.md`)**](./docs/AI_AGENT_GUIDE.md)
+* 🛠️ [**Referensi 15+ Built-in Tools (`docs/TOOLS_REFERENCE.md`)**](./docs/TOOLS_REFERENCE.md)
+* 🗺️ [**Roadmap Pengembangan Fitur (`docs/ROADMAP.md`)**](./docs/ROADMAP.md)
 
 ---
 
@@ -212,127 +443,31 @@ Ingin mempelajari arsitektur internal atau konfigurasi lanjutan? Kunjungi folder
 
 ### 💡 What is ctrl-cli?
 
-Imagine having a **senior software engineer in your terminal**. You simply explain what you want to build or fix in plain English, and `ctrl-cli` reads your workspace, writes code, verifies compiler diagnostics, and automatically fixes errors on the spot!
+`ctrl-cli` is an **ultra-lightweight (~1.8 MB)** autonomous AI coding assistant in your terminal, built with **100% pure Rust**. It can explore workspaces, surgically edit code, verify compiler errors (`cargo check`, python, tsc), and self-heal issues automatically.
 
-Unlike heavy Electron-based AI editors, `ctrl-cli` is engineered to be **ultra-lightweight (~1.8 MB binary)** and blazingly fast using **100% pure Rust**.
+#### 🚀 Quick Start (3 Minutes):
+1. **Clone & Enter**:
+   ```bash
+   git clone https://github.com/gafirin5/code-agent-rust.git
+   cd code-agent-rust
+   ```
+2. **Configure `.env`**:
+   ```bash
+   cp .env.example .env
+   ```
+   Choose either free **Groq** (`AI_BASE_URL=https://api.groq.com/openai/v1`), offline **Ollama** (`AI_BASE_URL=http://localhost:11434/v1`), or **OpenAI / DeepSeek**.
+3. **Run**:
+   ```bash
+   cargo run
+   ```
 
-#### ✨ Key Features:
-* 💬 **Interactive Terminal Chat**: Pair-program directly inside your favorite terminal.
-* 🛠️ **Autonomous Workspace Navigation**: Reads file trees, executes surgical edits, and runs commands safely.
-* 🩺 **Self-Healing Loop**: Captures compiler errors (`cargo check`, python, tsc) and automatically self-corrects code.
-* 🛡️ **Zero-Panic Safety (`/undo`)**: Checkpoints files before modifying them. Type `/undo` to instantly restore previous states.
-* 🆓 **Free & Offline Friendly**: Out-of-the-box support for blazing-fast free tiers (Groq), 100% offline local models (Ollama), and commercial APIs (OpenAI, DeepSeek, Gemini).
+#### 🎮 4 Operational Modes:
+* **Interactive REPL**: `cargo run` (chat with `/help`, `/undo`, `/diff`, `/model`, `/skill`).
+* **Fullscreen TUI**: `cargo run --bin ctrl-cli-tui` (or type `/tui` in REPL).
+* **Web Dashboard**: `cargo run -- serve` (visit `http://127.0.0.1:3000`).
+* **One-Shot Command**: `cargo run -- generate "prompt..."`.
 
----
-
-### ⚡ 3-Step Quick Start
-
-#### 1. Clone & Enter Directory
-Ensure [Rust](https://rustup.rs/) (2021 edition or newer) is installed:
-```bash
-git clone https://github.com/gafirin5/code-agent-rust.git
-cd code-agent-rust
-```
-
-#### 2. Configure Your `.env`
-Copy the environment template:
-```bash
-# Windows (CMD / PowerShell):
-copy .env.example .env
-
-# Linux / macOS:
-cp .env.example .env
-```
-
-Edit `.env` and select your provider:
-
-> 💡 **Want a free & instant setup?**
-> * **Option A: Groq (Free & Extremely Fast — Recommended)**
->   1. Grab a free key at [console.groq.com/keys](https://console.groq.com/keys) (no credit card required).
->   2. Set in `.env`:
->   ```env
->   AI_API_KEY=gsk_xxxxxxxxxxxxxxxxxxxxxx
->   AI_BASE_URL=https://api.groq.com/openai/v1
->   AI_MODEL=llama-3.3-70b-versatile
->   ```
->
-> * **Option B: Ollama (100% Offline & Private)**
->   1. Install [Ollama](https://ollama.com/) and run: `ollama run qwen2.5-coder:7b`
->   2. Set in `.env`:
->   ```env
->   AI_API_KEY=ollama
->   AI_BASE_URL=http://localhost:11434/v1
->   AI_MODEL=qwen2.5-coder:7b
->   ```
->
-> * **Option C: OpenAI / DeepSeek**
->   ```env
->   AI_API_KEY=sk-xxxxxxxxxxxxxxxxxxxxxx
->   AI_BASE_URL=https://api.openai.com/v1   # or https://api.deepseek.com/v1
->   AI_MODEL=gpt-4o-mini                   # or deepseek-chat
->   ```
-
-#### 3. Run It!
-```bash
-cargo run
-```
-
-> 💡 **Global Install**: To run `ctrl-cli` anywhere on your machine without typing `cargo run`:
-> ```bash
-> cargo install --path . --force
-> ```
-
----
-
-### 🎮 4 Ways to Run ctrl-cli
-
-| Mode | Command | Best For |
-| :--- | :--- | :--- |
-| **1. 💬 Chat Mode (REPL)** | `cargo run` (or `ctrl-cli`) | Default conversational terminal workflow. |
-| **2. 🖥️ Fullscreen TUI** | `ctrl-cli-tui` (or type `/tui`) | Vim/Htop style dashboard with chat feeds & task monitors. |
-| **3. 🌐 Web Dashboard** | `cargo run -- serve` | Open `http://127.0.0.1:3000` in your browser for a graphical UI. |
-| **4. ⚡ One-Shot CLI** | `cargo run -- generate "..."` | Quick scripting, pipe-friendly answers, and direct file output. |
-
-#### One-Shot Examples:
-```bash
-# Quick explanation:
-cargo run -- generate "how to read a file line by line in Rust?"
-
-# Generate code directly into a file:
-cargo run -- generate -o greet.py "write a python script that greets the user by local time"
-```
-
----
-
-### ⌨️ Essential Slash Commands
-
-Type `/` in REPL mode and use `↑`/`↓` keys to navigate:
-
-| Command | Description |
-| :--- | :--- |
-| **/help** | ❓ Show comprehensive command list and guidance. |
-| **/undo** | ⏪ **Revert last modified file** to previous checkpoint snapshot. |
-| **/diff** | 🔍 Show colorized unified diff of recent changes. |
-| **/check** | 🩺 Run compiler/syntax self-healing check. |
-| **/tui** | 🖥️ Switch to fullscreen TUI dashboard instantly. |
-| **/model** | 🔄 Switch active AI model interactively. |
-| **/skill** | 🎭 Activate specialized persona (Rust Expert, Reviewer, etc.). |
-| **/tokens** | 📊 View token consumption and remaining context capacity. |
-| **/compact** | 🧹 Compact chat history to save tokens. |
-| **/clear** | 🧼 Clear terminal screen. |
-| **/exit** | 🚪 Exit application. |
-
----
-
-### 📚 Full Technical Documentation
-
-* 📝 [Release Notes & Updates (`UPDATE_NOTES.md`)](./docs/UPDATE_NOTES.md)
-* 📊 [Performance Benchmarks (`PERFORMANCE.md`)](./docs/PERFORMANCE.md)
-* ⚙️ [Configuration Guide (`CONFIGURATION.md`)](./docs/CONFIGURATION.md)
-* 🏗️ [System Architecture (`ARCHITECTURE.md`)](./docs/ARCHITECTURE.md)
-* 🤖 [AI Agent Manual (`AI_AGENT_GUIDE.md`)](./docs/AI_AGENT_GUIDE.md)
-* 🛠️ [Tools Reference Guide (`TOOLS_REFERENCE.md`)](./docs/TOOLS_REFERENCE.md)
-* 🗺️ [Future Roadmap (`ROADMAP.md`)](./docs/ROADMAP.md)
+For comprehensive technical architecture, tools reference, and benchmarks, check the [Technical Docs](./docs/README.md).
 
 ---
 
@@ -340,62 +475,21 @@ Type `/` in REPL mode and use `↑`/`↓` keys to navigate:
 
 ### 💡 什么是 ctrl-cli？
 
-**`ctrl-cli`** 是你终端里的超轻量级 AI 结对编程助手 —— 类似于 *Claude Code* 或 *Cursor CLI*，但体积**极小（仅 ~1.8 MB）**，完全采用**纯 Rust 编写**，极致轻巧且不占内存。
+**`ctrl-cli`** 是完全采用 **纯 Rust 编写** 的极轻量终端 AI 编程助手与自主智能体（体积仅 ~1.8 MB，内存占用 < 25 MB）。具备文件精准手术式编辑、编译器错误自愈修复（Self-Healing）、自动快照撤销（`/undo`）以及多子任务并发处理能力。
 
-#### ✨ 核心亮点：
-- 💬 **终端交互对话**：直接在控制台与 AI 讨论架构、编写函数与重构。
-- 🛠️ **自主工作区探索**：自动检索文件、实施精准定点修改，并安全运行终端指令。
-- 🩺 **代码自愈修复（Self-Healing）**：编辑后自动执行编译器诊断（`cargo check`、Python、tsc），遇到报错立即自动纠正。
-- 🛡️ **安全防慌（`/undo`）**：每次修改前自动在 `.ctrl/snapshots/` 建立快照备份，随时输入 `/undo` 一键无损还原。
-- 🆓 **支持免费与离线模型**：原生支持超高速免费 API（Groq）、100% 离线隐私模型（Ollama）以及商用模型（OpenAI、DeepSeek、Gemini）。
+#### ⚡ 3 步极速上手：
+1. **克隆代码**：
+   ```bash
+   git clone https://github.com/gafirin5/code-agent-rust.git
+   cd code-agent-rust
+   ```
+2. **配置密钥**：复制 `.env.example` 为 `.env`，填入 Groq（免费极速）、本地 Ollama（100% 离线隐私）或 OpenAI/DeepSeek 密钥。
+3. **启动运行**：
+   ```bash
+   cargo run
+   ```
 
----
-
-### ⚡ 3 步极速上手
-
-#### 1. 克隆并进入目录
-```bash
-git clone https://github.com/gafirin5/code-agent-rust.git
-cd code-agent-rust
-```
-
-#### 2. 配置 `.env` 密钥文件
-```bash
-# Windows:
-copy .env.example .env
-
-# Linux / macOS:
-cp .env.example .env
-```
-
-在 `.env` 中填入你的配置（支持 Groq 免费模型、本地 Ollama 或 OpenAI/DeepSeek）。
-
-#### 3. 运行！
-```bash
-cargo run
-```
-
-> 💡 **全局安装**：若想在任意目录直接输入 `ctrl-cli` 运行，执行：
-> ```bash
-> cargo install --path . --force
-> ```
-
----
-
-### ⌨️ 常用斜杠命令速查
-
-| 命令 | 功能说明 |
-| :--- | :--- |
-| **/help** | ❓ 显示完整帮助与命令列表 |
-| **/undo** | ⏪ **撤销最近的文件修改**（恢复上一快照） |
-| **/diff** | 🔍 查看最新文件改动的对比 |
-| **/check** | 🩺 运行编译器诊断并自动修复错误 |
-| **/tui** | 🖥️ 切换至全屏 TUI 可视化终端仪表盘 |
-| **/model** | 🔄 交互式切换 AI 模型 |
-| **/skill** | 🎭 激活特定领域专家技能 |
-| **/tokens** | 📊 查看 Token 消耗与上下文余量 |
-| **/compact** | 🧹 压缩长对话以节省 Token |
-| **/exit** | 🚪 退出程序 |
+详细技术架构设计与 15+ 工具参数规范请参阅 [完整文档目录](./docs/README.md)。
 
 ---
 
