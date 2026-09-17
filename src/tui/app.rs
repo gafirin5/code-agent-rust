@@ -587,6 +587,32 @@ impl App {
                     }
                 }
             }
+            "/theme" | "/themes" => {
+                if parts.len() > 1 {
+                    let req = parts[1..].join(" ");
+                    if let Some(applied) = crate::tui::ui::set_theme_by_name(&req) {
+                        self.set_status(format!("🎨 Tema aktif disetel ke: {}", applied));
+                    } else {
+                        self.set_status(format!(
+                            "Tema '{}' tidak dikenal. Tersedia: {}",
+                            req,
+                            crate::tui::ui::THEME_NAMES.join(", ")
+                        ));
+                    }
+                } else {
+                    let next = crate::tui::ui::cycle_theme();
+                    self.set_status(format!("🎨 Tema diubah ke: {} (F6 untuk ganti tema)", next));
+                }
+            }
+            "/zen" | "/sidebar" => {
+                let collapsed = crate::tui::ui::toggle_sidebar();
+                let msg = if collapsed {
+                    "🪟 Zen Mode aktif (Sidebar disembunyikan - F9 / Ctrl+B untuk membuka)"
+                } else {
+                    "🪟 Sidebar ditampilkan kembali"
+                };
+                self.set_status(msg);
+            }
             "/cli" | "/repl" => {
                 self.request_return_to_repl();
             }

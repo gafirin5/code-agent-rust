@@ -860,6 +860,16 @@ pub const COMMAND_SPECS: &[CommandSpec] = &[
         description: "Beralih ke antarmuka grafis terminal (Ratatui TUI)",
     },
     CommandSpec {
+        primary: "/theme",
+        aliases: &["/themes"],
+        description: "Ganti tema warna tampilan TUI (Tokyo Night, Catppuccin, Gruvbox, Cyberpunk, Monokai)",
+    },
+    CommandSpec {
+        primary: "/zen",
+        aliases: &["/sidebar"],
+        description: "Toggle Zen Mode (tampilkan / sembunyikan sidebar di TUI)",
+    },
+    CommandSpec {
         primary: "/exit",
         aliases: &["/quit"],
         description: "Keluar dari aplikasi ctrl-cli",
@@ -3335,6 +3345,20 @@ mod tests {
         assert!(spec.aliases.contains(&"/skill-list"));
         assert!(spec.description.contains("skill") || spec.description.contains("persona"));
     }
+
+    #[test]
+    fn test_command_specs_contains_theme_and_zen() {
+        let theme_spec = COMMAND_SPECS.iter().find(|s| s.primary == "/theme");
+        assert!(theme_spec.is_some(), "/theme must be present in COMMAND_SPECS");
+        let t_spec = theme_spec.unwrap();
+        assert!(t_spec.aliases.contains(&"/themes"));
+
+        let zen_spec = COMMAND_SPECS.iter().find(|s| s.primary == "/zen");
+        assert!(zen_spec.is_some(), "/zen must be present in COMMAND_SPECS");
+        let z_spec = zen_spec.unwrap();
+        assert!(z_spec.aliases.contains(&"/sidebar"));
+    }
+
 
     #[test]
     fn test_resolve_slash_command_skills() {

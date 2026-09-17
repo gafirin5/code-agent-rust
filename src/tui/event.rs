@@ -62,7 +62,39 @@ fn handle_key_event(app: &mut App, key: KeyEvent) {
         return;
     }
 
-    // Priority 2: Global Quitting and Navigation
+    // Priority 1.5: Command Palette Modal active intercepts keys
+    if crate::tui::ui::is_command_palette_open() {
+        match key.code {
+            KeyCode::Esc => {
+                crate::tui::ui::close_command_palette();
+            }
+            KeyCode::Up => {
+                crate::tui::ui::palette_move_up();
+            }
+            KeyCode::Down => {
+                crate::tui::ui::palette_move_down();
+            }
+            KeyCode::Backspace => {
+                crate::tui::ui::palette_backspace();
+            }
+            KeyCode::Char(c) => {
+                crate::tui::ui::palette_append_char(c);
+            }
+            KeyCode::Enter => {
+                if let Some(cmd) = crate::tui::ui::get_selected_palette_command() {
+                    let action = cmd.action_id;
+                    crate::tui::ui::close_command_palette();
+                    execute_palette_action(app, action);
+                } else {
+                    crate::tui::ui::close_command_palette();
+                }
+            }
+            _ => {}
+        }
+        return;
+    }
+
+    // Priority 2: Global Quitting, Modals, and Navigation
     if key.modifiers.contains(KeyModifiers::CONTROL) {
         match key.code {
             KeyCode::Char('c') | KeyCode::Char('q') => {
@@ -79,11 +111,25 @@ fn handle_key_event(app: &mut App, key: KeyEvent) {
                 app.set_status("Layar chat dibersihkan.");
                 return;
             }
+            KeyCode::Char('p') => {
+                crate::tui::ui::toggle_command_palette();
+                return;
+            }
+            KeyCode::Char('b') => {
+                let collapsed = crate::tui::ui::toggle_sidebar();
+                let msg = if collapsed {
+                    "🪟 Zen Mode aktif (Sidebar disembunyikan - F9 / Ctrl+B untuk membuka)"
+                } else {
+                    "🪟 Sidebar ditampilkan kembali"
+                };
+                app.set_status(msg);
+                return;
+            }
             _ => {}
         }
     }
 
-    // Priority 3: Function Keys for Direct Tab Access & Return to CLI
+    // Priority 3: Function Keys for Direct Tab Access, Themes, Zen & Return to CLI
     match key.code {
         KeyCode::F(1) => {
             app.active_tab = SidebarTab::Help;
@@ -107,6 +153,25 @@ fn handle_key_event(app: &mut App, key: KeyEvent) {
         }
         KeyCode::F(5) => {
             app.request_return_to_repl();
+            return;
+        }
+        KeyCode::F(6) => {
+            let next_theme = crate::tui::ui::cycle_theme();
+            app.set_status(format!("🎨 Tema diubah ke: {} (F6 untuk rotasi)", next_theme));
+            return;
+        }
+        KeyCode::F(8) => {
+            crate::tui::ui::toggle_command_palette();
+            return;
+        }
+        KeyCode::F(9) => {
+            let collapsed = crate::tui::ui::toggle_sidebar();
+            let msg = if collapsed {
+                "🪟 Zen Mode aktif (Sidebar disembunyikan - F9 untuk membuka)"
+            } else {
+                "🪟 Sidebar ditampilkan kembali"
+            };
+            app.set_status(msg);
             return;
         }
         _ => {}
@@ -237,6 +302,15 @@ fn handle_chat_keys(app: &mut App, key: KeyEvent) {
         KeyCode::End => {
             app.auto_scroll = true;
         }
+        KeyCode::Char('z') | KeyCode::Char(' ') => {
+            let folded = crate::tui::ui::toggle_thought_folding();
+            let msg = if folded {
+                "💭 Thought Process dilipat / disembunyikan (tekan 'z' untuk membuka)"
+            } else {
+                "💭 Thought Process ditampilkan penuh"
+            };
+            app.set_status(msg);
+        }
         KeyCode::Char('i') | KeyCode::Enter => {
             app.focused_pane = FocusedPane::Input;
         }
@@ -335,3 +409,75 @@ fn handle_sidebar_keys(app: &mut App, key: KeyEvent) {
         }
     }
 }
+
+fn execute_palette_action(app: &mut App, action: &str) {
+    if let Some(idx_str) = action.strip_prefix("theme:") {
+        if let Ok(idx) = idx_str.parse::<usize>() {
+            let name = crate::tui::ui::set_theme_by_index(idx);
+            app.set_status(format!("🎨 Tema aktif: {}", name));
+        }
+    } else {
+        match action {
+            "zen" => {
+                let collapsed = crate::tui::ui::toggle_sidebar();
+                let msg = if collapsed {
+                    "🪟 Zen Mode aktif (Sidebar disembunyikan - F9 / Ctrl+B untuk membuka)"
+                } else {
+                    "🪟 Sidebar ditampilkan kembali"
+                };
+                app.set_status(msg);
+            }
+            "fold_thought" => {
+                let folded = crate::tui::ui::toggle_thought_folding();
+                let msg = if folded {
+                    "💭 Thought Process dilipat / disembunyikan (tekan 'z' untuk membuka)"
+                } else {
+                    "💭 Thought Process ditampilkan penuh"
+                };
+                app.set_status(msg);
+            }
+            "clear_chat" => {
+                app.chat_items.clear();
+                app.set_status("Layar chat dibersihkan.");
+            }
+            "tab_tasks" => {
+                app.active_tab = SidebarTab::Tasks;
+                app.focused_pane = FocusedPane::Sidebar;
+            }
+            "tab_skills" => {
+                app.active_tab = SidebarTab::Skills;
+                app.focused_pane = FocusedPane::Sidebar;
+            }
+            "tab_providers" => {
+                app.active_tab = SidebarTab::Provider;
+                app.focused_pane = FocusedPane::Sidebar;
+            }
+            "tab_help" => {
+                app.active_tab = SidebarTab::Help;
+                app.focused_pane = FocusedPane::Sidebar;
+            }
+            "compact" => {
+                let prov = app.providers_reg.get_active_provider();
+                let limit = prov.context_window.unwrap_or(128_000);
+                let _ = crate::agent::compaction::maybe_compact_context(
+                    &mut app.conversation,
+                    &app.current_model,
+                    &prov.api_key,
+                    &prov.base_url,
+                    prov.protocol,
+                    limit,
+                );
+                app.set_status("Kompaksi konteks token dieksekusi.");
+            }
+            "repl" => {
+                app.request_return_to_repl();
+            }
+            "quit" => {
+                app.cancel_agent();
+                app.should_quit = true;
+            }
+            _ => {}
+        }
+    }
+}
+

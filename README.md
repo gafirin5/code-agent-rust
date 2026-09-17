@@ -175,29 +175,32 @@ Berikut gambaran alur saat kamu menggunakan `ctrl-cli`:
 
 | Mode | Cara Menjalankan | Kapan Cocok Digunakan? |
 | :--- | :--- | :--- |
-| **1. 🖥️ Visual Terminal (TUI)** | `.\tui` / `cargo tui` / `ctrl-cli -t` / ketik `tui` di REPL | **Paling Direkomendasikan & Modern.** Tampilan fullscreen dengan tema Nord/Tokyo Night, pesan berbingkai kartu, syntax highlighting native + ikon bahasa, live animated spinner, preview output tool multi-baris, dan sidebar interaktif (F1–F4). |
+| **1. 🖥️ Visual Terminal (TUI)** | `.\tui` / `cargo tui` / `ctrl-cli -t` / ketik `tui` di REPL | **Paling Direkomendasikan & Modern.** Tampilan fullscreen dengan 5 tema warna (F6), Zen Mode layar penuh (F9), Command Palette (F8/Ctrl+P), pesan berbingkai kartu, syntax highlighting native + ikon bahasa + diff highlighting, live animated spinner, telemetry & context window gauge, foldable reasoning (z), dan sidebar interaktif (F1–F4). |
 | **2. 💬 Chat Terminal (REPL)** | `cargo run` (atau `ctrl-cli --cli`) | **Classic & Ringan.** Mengobrol santai baris-per-baris dengan auto-completion `/` dan hot-switch ke TUI kapan saja tanpa memutus sesi. |
 | **3. 🌐 Web Browser** | `cargo run -- serve` | **Tampilan Grafis Browser.** Buka `http://127.0.0.1:3000` di Chrome/Firefox untuk memantau proses secara visual via REST & SSE. |
 | **4. ⚡ Sekali Jalan (One-Shot)** | `cargo run -- generate "..."` | **Scripting / Automasi.** Menghasilkan kode atau jawaban instan langsung ke file tanpa masuk sesi chat interaktif. |
 
-#### Contoh Perintah Sekali Jalan (One-Shot):
-```bash
-# Tanya cara koding cepat:
-cargo run -- generate "bagaimana cara membaca file baris demi baris di Rust?"
-
-# Buat script dan langsung simpan ke file tanpa perlu copy-paste manual:
-cargo run -- generate -o salam.py "buat script python untuk menyapa pengguna sesuai waktu"
-```
+#### Pintasan Keyboard & Fitur Canggih TUI:
+- **`F6`** atau **`/theme`**: Ganti tema warna secara live (Tokyo Night, Catppuccin Mocha, Gruvbox Dark, Cyberpunk Matrix, Monokai Pro).
+- **`F8`** atau **`Ctrl+P`**: Buka **Command Palette** modal terapung untuk mencari dan mengeksekusi aksi instan.
+- **`F9`** atau **`Ctrl+B`** atau **`/zen`**: Toggle **Zen Mode** (sembunyikan / tampilkan sidebar untuk fokus penuh).
+- **`z`** atau **`Space`** (di panel Chat): **Fold / Unfold** reasoning *Thought Process* agar chat rapi dan ringkas.
+- **`F1`–`F4`**: Akses cepat tab Sidebar (Help, Tasks, Skills, Provider).
+- **`F5`** atau **`:cli`**: Kembali ke mode CLI / REPL biasa kapan saja.
+- **`Tab`**: Pindah fokus navigasi antar panel (Input ⇄ Chat ⇄ Sidebar).
+- **Statusline Cerdas**: Visual context window gauge `Ctx [████░░░░] %` (hijau/kuning/merah), Git branch indicator (` 🌿 master `), dan live RAM/CPU metrics.
 
 ---
 
 ### ⌨️ 5. Menu Perintah Cepat (Slash Commands)
 
-Saat berada di dalam mode chat (REPL), ketik `/` lalu gunakan tombol panah keyboard `↑` / `↓` untuk memilih perintah:
+Saat berada di dalam mode chat (REPL) atau TUI, ketik `/` lalu gunakan tombol panah keyboard `↑` / `↓` untuk memilih perintah:
 
 | Perintah | Fungsi & Kegunaan |
 | :--- | :--- |
 | **/help** | ❓ Menampilkan panduan bantuan lengkap seluruh perintah. |
+| **/theme** | 🎨 Ganti tema warna TUI (Tokyo Night, Catppuccin, Gruvbox, Matrix, Monokai). |
+| **/zen** | 🪟 Toggle Zen Mode layar penuh (sembunyikan / tampilkan sidebar). |
 | **/undo** | ⏪ **Batalkan perubahan file terakhir** (kembali ke snapshot sebelum diedit). |
 | **/diff** | 🔍 Tampilkan perbandingan baris kode yang baru saja dimodifikasi. |
 | **/check** | 🩺 Jalankan compiler / linter untuk memastikan tidak ada syntax error. |

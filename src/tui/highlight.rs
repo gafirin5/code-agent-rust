@@ -42,6 +42,18 @@ pub fn highlight_markdown_code_blocks_ansi(content: &str) -> String {
 /// Highlights a single line or snippet of code using token-based lexical rules.
 pub fn highlight_code_tokens_ansi(line: &str, lang: &str) -> String {
     let lang_norm = lang.trim().to_lowercase();
+    if lang_norm == "diff" || lang_norm == "patch" {
+        if line.starts_with('+') && !line.starts_with("+++") {
+            return format!("\x1b[32m{}\x1b[0m", line);
+        } else if line.starts_with('-') && !line.starts_with("---") {
+            return format!("\x1b[31m{}\x1b[0m", line);
+        } else if line.starts_with("@@") {
+            return format!("\x1b[36m\x1b[1m{}\x1b[0m", line);
+        } else if line.starts_with("diff ") || line.starts_with("index ") || line.starts_with("---") || line.starts_with("+++") {
+            return format!("\x1b[35m\x1b[1m{}\x1b[0m", line);
+        }
+        return line.to_string();
+    }
     let keywords = match lang_norm.as_str() {
         "rust" | "rs" => vec![
             "fn", "let", "mut", "pub", "struct", "enum", "match", "impl", "use",
@@ -114,6 +126,7 @@ pub fn get_language_label(lang: &str) -> &'static str {
         "json" => "📋 JSON",
         "toml" => "⚙ TOML",
         "markdown" | "md" => "📝 Markdown",
+        "diff" | "patch" => "🔍 Git Diff",
         "yaml" | "yml" => "📄 YAML",
         "sql" => "🗄 SQL",
         "html" => "🌐 HTML",
@@ -125,6 +138,36 @@ pub fn get_language_label(lang: &str) -> &'static str {
 /// Highlights a single line of code into styled Ratatui Spans without intermediate ANSI escapes.
 pub fn highlight_code_line_spans<'a>(line: &'a str, lang: &str) -> Vec<Span<'a>> {
     let lang_norm = lang.trim().to_lowercase();
+    if lang_norm == "diff" || lang_norm == "patch" {
+        if line.starts_with('+') && !line.starts_with("+++") {
+            return vec![Span::styled(
+                line,
+                Style::default().fg(Color::Rgb(163, 190, 140)), // green
+            )];
+        } else if line.starts_with('-') && !line.starts_with("---") {
+            return vec![Span::styled(
+                line,
+                Style::default().fg(Color::Rgb(191, 97, 106)), // red
+            )];
+        } else if line.starts_with("@@") {
+            return vec![Span::styled(
+                line,
+                Style::default()
+                    .fg(Color::Rgb(136, 192, 208)) // cyan
+                    .add_modifier(Modifier::BOLD),
+            )];
+        } else if line.starts_with("diff ") || line.starts_with("index ") || line.starts_with("---") || line.starts_with("+++") {
+            return vec![Span::styled(
+                line,
+                Style::default()
+                    .fg(Color::Rgb(180, 142, 173)) // purple
+                    .add_modifier(Modifier::BOLD),
+            )];
+        } else {
+            return vec![Span::raw(line)];
+        }
+    }
+
     let keywords: &[&str] = match lang_norm.as_str() {
         "rust" | "rs" => &[
             "fn", "let", "mut", "pub", "struct", "enum", "match", "impl", "use",
@@ -266,5 +309,28 @@ mod tests {
 
         let labels = get_language_label("rs");
         assert!(labels.contains("Rust"));
+        let diff_labels = get_language_label("diff");
+        assert!(diff_labels.contains("Diff"));
+    }
+
+    #[test]
+    fn test_highlight_diff_code_block() {
+        let md = "```diff\n+added line\n-removed line\n@@ -1,3 +1,4 @@\n```";
+        let highlighted = highlight_markdown_code_blocks_ansi(md);
+        assert!(highlighted.contains("\x1b[32m+added line\x1b[0m"));
+        assert!(highlighted.contains("\x1b[31m-removed line\x1b[0m"));
+        assert!(highlighted.contains("\x1b[36m\x1b[1m@@ -1,3 +1,4 @@\x1b[0m"));
+    }
+
+    #[test]
+    fn test_highlight_diff_spans() {
+        let add_span = highlight_code_line_spans("+let x = 10;", "diff");
+        assert_eq!(add_span[0].content, "+let x = 10;");
+
+        let del_span = highlight_code_line_spans("-let x = 5;", "diff");
+        assert_eq!(del_span[0].content, "-let x = 5;");
+
+        let hunk_span = highlight_code_line_spans("@@ -10,4 +10,5 @@", "diff");
+        assert_eq!(hunk_span[0].content, "@@ -10,4 +10,5 @@");
     }
 }

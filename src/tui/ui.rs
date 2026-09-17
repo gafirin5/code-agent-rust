@@ -13,7 +13,8 @@ use crate::agent::tasks::{TaskManager, TaskStatus};
 use crate::get_available_skills;
 use crate::tui::app::{App, ChatItemKind, FocusedPane, SidebarTab};
 use std::borrow::Cow;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::Mutex;
 
 #[path = "highlight.rs"]
 pub mod highlight;
@@ -64,8 +65,207 @@ impl AsStrSlice for Cow<'static, str> {
     }
 }
 
-/// Unified aesthetic dark color theme inspired by Tokyo Night / Nord Slate.
+// Global UI Runtime States (Preserves 100% test compatibility)
+pub static CURRENT_THEME_ID: AtomicUsize = AtomicUsize::new(0);
+pub static SIDEBAR_COLLAPSED: AtomicBool = AtomicBool::new(false);
+pub static THOUGHT_PROCESS_FOLDED: AtomicBool = AtomicBool::new(false);
+pub static SHOW_COMMAND_PALETTE: AtomicBool = AtomicBool::new(false);
+pub static SELECTED_PALETTE_INDEX: AtomicUsize = AtomicUsize::new(0);
+pub static PALETTE_SEARCH_QUERY: Mutex<String> = Mutex::new(String::new());
+
+pub const THEME_NAMES: &[&str] = &[
+    "Tokyo Night",
+    "Catppuccin Mocha",
+    "Gruvbox Dark",
+    "Cyberpunk Matrix",
+    "Monokai Pro",
+];
+
+pub fn get_theme_count() -> usize {
+    THEME_NAMES.len()
+}
+
+pub fn get_current_theme_id() -> usize {
+    CURRENT_THEME_ID.load(Ordering::Relaxed) % THEME_NAMES.len()
+}
+
+pub fn get_current_theme_name() -> &'static str {
+    THEME_NAMES[get_current_theme_id()]
+}
+
+pub fn cycle_theme() -> &'static str {
+    let next = (get_current_theme_id() + 1) % THEME_NAMES.len();
+    CURRENT_THEME_ID.store(next, Ordering::Relaxed);
+    THEME_NAMES[next]
+}
+
+pub fn set_theme_by_index(idx: usize) -> &'static str {
+    let valid_idx = idx % THEME_NAMES.len();
+    CURRENT_THEME_ID.store(valid_idx, Ordering::Relaxed);
+    THEME_NAMES[valid_idx]
+}
+
+pub fn set_theme_by_name(name: &str) -> Option<&'static str> {
+    let norm = name.trim().to_lowercase();
+    for (idx, &theme_name) in THEME_NAMES.iter().enumerate() {
+        if theme_name.to_lowercase().contains(&norm) || norm.contains(&theme_name.to_lowercase()) {
+            CURRENT_THEME_ID.store(idx, Ordering::Relaxed);
+            return Some(theme_name);
+        }
+    }
+    None
+}
+
+pub fn toggle_sidebar() -> bool {
+    let next = !SIDEBAR_COLLAPSED.load(Ordering::Relaxed);
+    SIDEBAR_COLLAPSED.store(next, Ordering::Relaxed);
+    next
+}
+
+pub fn is_sidebar_collapsed() -> bool {
+    SIDEBAR_COLLAPSED.load(Ordering::Relaxed)
+}
+
+pub fn toggle_thought_folding() -> bool {
+    let next = !THOUGHT_PROCESS_FOLDED.load(Ordering::Relaxed);
+    THOUGHT_PROCESS_FOLDED.store(next, Ordering::Relaxed);
+    next
+}
+
+pub fn is_thought_process_folded() -> bool {
+    THOUGHT_PROCESS_FOLDED.load(Ordering::Relaxed)
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct PaletteCommand {
+    pub icon: &'static str,
+    pub title: &'static str,
+    pub shortcut: &'static str,
+    pub action_id: &'static str,
+}
+
+pub const PALETTE_COMMANDS: &[PaletteCommand] = &[
+    PaletteCommand { icon: "🎨", title: "Ganti Tema: Tokyo Night", shortcut: "F6", action_id: "theme:0" },
+    PaletteCommand { icon: "🎨", title: "Ganti Tema: Catppuccin Mocha", shortcut: "F6", action_id: "theme:1" },
+    PaletteCommand { icon: "🎨", title: "Ganti Tema: Gruvbox Dark", shortcut: "F6", action_id: "theme:2" },
+    PaletteCommand { icon: "🎨", title: "Ganti Tema: Cyberpunk Matrix", shortcut: "F6", action_id: "theme:3" },
+    PaletteCommand { icon: "🎨", title: "Ganti Tema: Monokai Pro", shortcut: "F6", action_id: "theme:4" },
+    PaletteCommand { icon: "🪟", title: "Toggle Zen Mode (Sidebar)", shortcut: "F9", action_id: "zen" },
+    PaletteCommand { icon: "💭", title: "Toggle Lipat Thought Process", shortcut: "z", action_id: "fold_thought" },
+    PaletteCommand { icon: "🧹", title: "Bersihkan Chat Stream", shortcut: "Ctrl+L", action_id: "clear_chat" },
+    PaletteCommand { icon: "📋", title: "Buka Tab Background Tasks", shortcut: "F2", action_id: "tab_tasks" },
+    PaletteCommand { icon: "🎯", title: "Buka Tab AI Skills", shortcut: "F3", action_id: "tab_skills" },
+    PaletteCommand { icon: "⚡", title: "Buka Tab AI Providers", shortcut: "F4", action_id: "tab_providers" },
+    PaletteCommand { icon: "❓", title: "Buka Tab Bantuan / Help", shortcut: "F1", action_id: "tab_help" },
+    PaletteCommand { icon: "📦", title: "Kompaksi Konteks Token", shortcut: "/compact", action_id: "compact" },
+    PaletteCommand { icon: "🔄", title: "Kembali ke Mode REPL / CLI", shortcut: "F5", action_id: "repl" },
+    PaletteCommand { icon: "🚪", title: "Keluar dari ctrl-cli", shortcut: "Ctrl+C", action_id: "quit" },
+];
+
+pub fn toggle_command_palette() -> bool {
+    let next = !SHOW_COMMAND_PALETTE.load(Ordering::Relaxed);
+    SHOW_COMMAND_PALETTE.store(next, Ordering::Relaxed);
+    if next {
+        SELECTED_PALETTE_INDEX.store(0, Ordering::Relaxed);
+        if let Ok(mut q) = PALETTE_SEARCH_QUERY.lock() {
+            q.clear();
+        }
+    }
+    next
+}
+
+pub fn close_command_palette() {
+    SHOW_COMMAND_PALETTE.store(false, Ordering::Relaxed);
+}
+
+pub fn is_command_palette_open() -> bool {
+    SHOW_COMMAND_PALETTE.load(Ordering::Relaxed)
+}
+
+pub fn get_palette_query() -> String {
+    PALETTE_SEARCH_QUERY.lock().map(|q| q.clone()).unwrap_or_default()
+}
+
+pub fn palette_append_char(c: char) {
+    if let Ok(mut q) = PALETTE_SEARCH_QUERY.lock() {
+        q.push(c);
+    }
+    SELECTED_PALETTE_INDEX.store(0, Ordering::Relaxed);
+}
+
+pub fn palette_backspace() {
+    if let Ok(mut q) = PALETTE_SEARCH_QUERY.lock() {
+        q.pop();
+    }
+    SELECTED_PALETTE_INDEX.store(0, Ordering::Relaxed);
+}
+
+pub fn get_filtered_palette_commands() -> Vec<&'static PaletteCommand> {
+    let query = get_palette_query().to_lowercase();
+    if query.is_empty() {
+        PALETTE_COMMANDS.iter().collect()
+    } else {
+        PALETTE_COMMANDS
+            .iter()
+            .filter(|cmd| {
+                cmd.title.to_lowercase().contains(&query)
+                    || cmd.shortcut.to_lowercase().contains(&query)
+                    || cmd.action_id.to_lowercase().contains(&query)
+            })
+            .collect()
+    }
+}
+
+pub fn palette_move_up() {
+    let cmds = get_filtered_palette_commands();
+    if cmds.is_empty() {
+        return;
+    }
+    let cur = SELECTED_PALETTE_INDEX.load(Ordering::Relaxed);
+    if cur > 0 {
+        SELECTED_PALETTE_INDEX.store(cur - 1, Ordering::Relaxed);
+    } else {
+        SELECTED_PALETTE_INDEX.store(cmds.len().saturating_sub(1), Ordering::Relaxed);
+    }
+}
+
+pub fn palette_move_down() {
+    let cmds = get_filtered_palette_commands();
+    if cmds.is_empty() {
+        return;
+    }
+    let cur = SELECTED_PALETTE_INDEX.load(Ordering::Relaxed);
+    if cur + 1 < cmds.len() {
+        SELECTED_PALETTE_INDEX.store(cur + 1, Ordering::Relaxed);
+    } else {
+        SELECTED_PALETTE_INDEX.store(0, Ordering::Relaxed);
+    }
+}
+
+pub fn get_selected_palette_command() -> Option<&'static PaletteCommand> {
+    let cmds = get_filtered_palette_commands();
+    let idx = SELECTED_PALETTE_INDEX.load(Ordering::Relaxed);
+    cmds.get(idx).copied()
+}
+
+pub fn get_git_branch() -> Option<String> {
+    for path in &[".git/HEAD", "../.git/HEAD", "../../.git/HEAD"] {
+        if let Ok(content) = std::fs::read_to_string(path) {
+            let trimmed = content.trim();
+            if let Some(branch) = trimmed.strip_prefix("ref: refs/heads/") {
+                return Some(branch.to_string());
+            } else if trimmed.len() >= 7 {
+                return Some(trimmed[..7].to_string());
+            }
+        }
+    }
+    None
+}
+
+/// Unified aesthetic dark color theme with multiple switchable presets.
+#[derive(Clone, Copy, Debug)]
 pub struct Theme {
+    pub name: &'static str,
     pub border_normal: Color,
     pub border_focused: Color,
     pub border_subtle: Color,
@@ -82,9 +282,10 @@ pub struct Theme {
     pub highlight_bg: Color,
 }
 
-impl Default for Theme {
-    fn default() -> Self {
+impl Theme {
+    pub fn tokyo_night() -> Self {
         Self {
+            name: "Tokyo Night",
             border_normal: Color::Rgb(76, 86, 106),
             border_focused: Color::Rgb(136, 192, 208),
             border_subtle: Color::Rgb(59, 66, 82),
@@ -101,11 +302,108 @@ impl Default for Theme {
             highlight_bg: Color::Rgb(67, 76, 94),
         }
     }
+
+    pub fn catppuccin_mocha() -> Self {
+        Self {
+            name: "Catppuccin Mocha",
+            border_normal: Color::Rgb(88, 91, 112),
+            border_focused: Color::Rgb(203, 166, 247),
+            border_subtle: Color::Rgb(69, 71, 90),
+            primary: Color::Rgb(137, 180, 250),
+            secondary: Color::Rgb(203, 166, 247),
+            accent: Color::Rgb(245, 194, 231),
+            success: Color::Rgb(166, 227, 161),
+            warning: Color::Rgb(249, 226, 175),
+            error: Color::Rgb(243, 139, 168),
+            text_main: Color::Rgb(205, 214, 244),
+            text_dim: Color::Rgb(147, 153, 178),
+            text_bright: Color::Rgb(255, 255, 255),
+            card_bg: Color::Rgb(30, 30, 46),
+            highlight_bg: Color::Rgb(49, 50, 68),
+        }
+    }
+
+    pub fn gruvbox_dark() -> Self {
+        Self {
+            name: "Gruvbox Dark",
+            border_normal: Color::Rgb(102, 92, 84),
+            border_focused: Color::Rgb(250, 189, 47),
+            border_subtle: Color::Rgb(80, 73, 69),
+            primary: Color::Rgb(142, 192, 124),
+            secondary: Color::Rgb(211, 134, 155),
+            accent: Color::Rgb(254, 128, 25),
+            success: Color::Rgb(184, 187, 38),
+            warning: Color::Rgb(250, 189, 47),
+            error: Color::Rgb(251, 73, 52),
+            text_main: Color::Rgb(235, 219, 178),
+            text_dim: Color::Rgb(168, 153, 132),
+            text_bright: Color::Rgb(253, 244, 193),
+            card_bg: Color::Rgb(40, 40, 40),
+            highlight_bg: Color::Rgb(60, 56, 54),
+        }
+    }
+
+    pub fn cyberpunk_matrix() -> Self {
+        Self {
+            name: "Cyberpunk Matrix",
+            border_normal: Color::Rgb(0, 100, 50),
+            border_focused: Color::Rgb(0, 255, 102),
+            border_subtle: Color::Rgb(20, 40, 30),
+            primary: Color::Rgb(0, 255, 102),
+            secondary: Color::Rgb(0, 229, 255),
+            accent: Color::Rgb(255, 0, 128),
+            success: Color::Rgb(0, 255, 102),
+            warning: Color::Rgb(255, 230, 0),
+            error: Color::Rgb(255, 34, 85),
+            text_main: Color::Rgb(220, 255, 230),
+            text_dim: Color::Rgb(0, 170, 90),
+            text_bright: Color::Rgb(255, 255, 255),
+            card_bg: Color::Rgb(10, 20, 15),
+            highlight_bg: Color::Rgb(20, 45, 30),
+        }
+    }
+
+    pub fn monokai_pro() -> Self {
+        Self {
+            name: "Monokai Pro",
+            border_normal: Color::Rgb(90, 85, 95),
+            border_focused: Color::Rgb(255, 216, 102),
+            border_subtle: Color::Rgb(60, 55, 65),
+            primary: Color::Rgb(120, 220, 232),
+            secondary: Color::Rgb(171, 157, 242),
+            accent: Color::Rgb(255, 97, 136),
+            success: Color::Rgb(169, 220, 118),
+            warning: Color::Rgb(255, 216, 102),
+            error: Color::Rgb(255, 97, 136),
+            text_main: Color::Rgb(252, 252, 250),
+            text_dim: Color::Rgb(147, 146, 147),
+            text_bright: Color::Rgb(255, 255, 255),
+            card_bg: Color::Rgb(45, 42, 46),
+            highlight_bg: Color::Rgb(64, 60, 65),
+        }
+    }
+
+    pub fn current() -> Self {
+        match get_current_theme_id() {
+            0 => Self::tokyo_night(),
+            1 => Self::catppuccin_mocha(),
+            2 => Self::gruvbox_dark(),
+            3 => Self::cyberpunk_matrix(),
+            4 => Self::monokai_pro(),
+            _ => Self::tokyo_night(),
+        }
+    }
+}
+
+impl Default for Theme {
+    fn default() -> Self {
+        Self::tokyo_night()
+    }
 }
 
 pub fn render(frame: &mut Frame, app: &mut App) {
     app.tick();
-    let theme = Theme::default();
+    let theme = Theme::current();
     let size = frame.area();
 
     // Main vertical layout: Header, Main Body (Chat + Sidebar), Input & Status
@@ -132,6 +430,11 @@ pub fn render(frame: &mut Frame, app: &mut App) {
     // Render Permission Modal Dialog if active
     if app.active_permission_request.is_some() {
         render_permission_modal(frame, app, size, &theme);
+    }
+
+    // Render Command Palette Modal if active
+    if is_command_palette_open() {
+        render_command_palette(frame, size, &theme);
     }
 }
 
@@ -175,6 +478,47 @@ fn render_header(frame: &mut Frame, app: &App, area: Rect, theme: &Theme) {
         ]
     };
 
+    let git_spans = if let Some(branch) = get_git_branch() {
+        vec![
+            Span::styled("│ ", Style::default().fg(theme.border_subtle)),
+            Span::styled(
+                format!(" 🌿 {} ", branch),
+                Style::default()
+                    .bg(theme.card_bg)
+                    .fg(theme.success)
+                    .add_modifier(Modifier::BOLD),
+            ),
+        ]
+    } else {
+        vec![]
+    };
+
+    let zen_spans = if is_sidebar_collapsed() {
+        vec![
+            Span::styled("│ ", Style::default().fg(theme.border_subtle)),
+            Span::styled(
+                " 🪟 ZEN (F9) ",
+                Style::default()
+                    .bg(theme.card_bg)
+                    .fg(theme.accent)
+                    .add_modifier(Modifier::BOLD),
+            ),
+        ]
+    } else {
+        vec![]
+    };
+
+    let theme_spans = vec![
+        Span::styled("│ ", Style::default().fg(theme.border_subtle)),
+        Span::styled(
+            format!(" 🎨 {} (F6) ", theme.name),
+            Style::default()
+                .bg(theme.card_bg)
+                .fg(theme.secondary)
+                .add_modifier(Modifier::BOLD),
+        ),
+    ];
+
     let title_line = Line::from(
         vec![
             Span::styled(
@@ -217,6 +561,9 @@ fn render_header(frame: &mut Frame, app: &App, area: Rect, theme: &Theme) {
         ]
         .into_iter()
         .chain(status_spans)
+        .chain(git_spans)
+        .chain(theme_spans)
+        .chain(zen_spans)
         .collect::<Vec<_>>(),
     );
 
@@ -266,16 +613,20 @@ fn parse_markdown_spans<'a>(text: &'a str, theme: &Theme) -> Vec<Span<'a>> {
 }
 
 fn render_body(frame: &mut Frame, app: &mut App, area: Rect, theme: &Theme) {
-    let body_chunks = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([
-            Constraint::Percentage(63), // Chat
-            Constraint::Percentage(37), // Sidebar
-        ])
-        .split(area);
+    if is_sidebar_collapsed() {
+        render_chat(frame, app, area, theme);
+    } else {
+        let body_chunks = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([
+                Constraint::Percentage(63), // Chat
+                Constraint::Percentage(37), // Sidebar
+            ])
+            .split(area);
 
-    render_chat(frame, app, body_chunks[0], theme);
-    render_sidebar(frame, app, body_chunks[1], theme);
+        render_chat(frame, app, body_chunks[0], theme);
+        render_sidebar(frame, app, body_chunks[1], theme);
+    }
 }
 
 fn render_chat(frame: &mut Frame, app: &mut App, area: Rect, theme: &Theme) {
@@ -454,20 +805,29 @@ fn render_chat(frame: &mut Frame, app: &mut App, area: Rect, theme: &Theme) {
                 lines.push(Line::raw(""));
             }
             ChatItemKind::Reasoning => {
-                lines.push(Line::from(vec![
-                    Span::styled("╭─ 💭 Thought Process ", Style::default().fg(theme.text_dim).add_modifier(Modifier::ITALIC)),
-                    Span::styled("───────────────────────────────────", Style::default().fg(theme.border_subtle)),
-                ]));
-                for r_line in item.text.lines() {
+                if is_thought_process_folded() {
                     lines.push(Line::from(vec![
-                        Span::styled("│  ", Style::default().fg(theme.border_subtle)),
-                        Span::styled(r_line, Style::default().fg(theme.text_dim).add_modifier(Modifier::ITALIC)),
+                        Span::styled("╭─ 💭 Thought Process ", Style::default().fg(theme.text_dim).add_modifier(Modifier::ITALIC)),
+                        Span::styled("[Dilipat - tekan 'z' di panel chat untuk membuka] ", Style::default().fg(theme.accent)),
+                        Span::styled("─────────────────╯", Style::default().fg(theme.border_subtle)),
                     ]));
+                    lines.push(Line::raw(""));
+                } else {
+                    lines.push(Line::from(vec![
+                        Span::styled("╭─ 💭 Thought Process ", Style::default().fg(theme.text_dim).add_modifier(Modifier::ITALIC)),
+                        Span::styled("───────────────────────────────────", Style::default().fg(theme.border_subtle)),
+                    ]));
+                    for r_line in item.text.lines() {
+                        lines.push(Line::from(vec![
+                            Span::styled("│  ", Style::default().fg(theme.border_subtle)),
+                            Span::styled(r_line, Style::default().fg(theme.text_dim).add_modifier(Modifier::ITALIC)),
+                        ]));
+                    }
+                    lines.push(Line::from(vec![
+                        Span::styled("╰───────────────────────────────────────────────────", Style::default().fg(theme.border_subtle)),
+                    ]));
+                    lines.push(Line::raw(""));
                 }
-                lines.push(Line::from(vec![
-                    Span::styled("╰───────────────────────────────────────────────────", Style::default().fg(theme.border_subtle)),
-                ]));
-                lines.push(Line::raw(""));
             }
             ChatItemKind::ToolCall { name, args } => {
                 lines.push(Line::from(vec![
@@ -1061,6 +1421,26 @@ fn render_help_tab(frame: &mut Frame, _app: &App, area: Rect, theme: &Theme) {
         ]),
         Line::from(vec![
             Span::raw("  "),
+            keycap("[F6] / /theme"),
+            desc("    : Ganti tema warna (Tokyo Night, Catppuccin, Gruvbox, Matrix, Monokai)"),
+        ]),
+        Line::from(vec![
+            Span::raw("  "),
+            keycap("[F8] / [Ctrl+P]"),
+            desc("  : Buka Command Palette (pencarian aksi modal cepat)"),
+        ]),
+        Line::from(vec![
+            Span::raw("  "),
+            keycap("[F9] / [Ctrl+B]"),
+            desc("  : Toggle Zen Mode (sembunyikan / tampilkan sidebar)"),
+        ]),
+        Line::from(vec![
+            Span::raw("  "),
+            keycap("[z] / [Space]"),
+            desc("    : Lipat / buka reasoning (saat fokus di panel Chat)"),
+        ]),
+        Line::from(vec![
+            Span::raw("  "),
             keycap("[PgUp] / [PgDn]"),
             desc("  : Gulir riwayat pesan percakapan"),
         ]),
@@ -1081,6 +1461,16 @@ fn render_help_tab(frame: &mut Frame, _app: &App, area: Rect, theme: &Theme) {
                 .fg(theme.accent)
                 .add_modifier(Modifier::BOLD),
         )),
+        Line::from(vec![
+            Span::raw("  "),
+            slash("/theme [nama]"),
+            desc("   : Pilih tema spesifik atau rotasi"),
+        ]),
+        Line::from(vec![
+            Span::raw("  "),
+            slash("/zen"),
+            desc("            : Masuk / keluar Zen Mode layar penuh"),
+        ]),
         Line::from(vec![
             Span::raw("  "),
             slash("/help"),
@@ -1321,31 +1711,83 @@ fn render_footer(frame: &mut Frame, app: &App, area: Rect, theme: &Theme) {
         ])
     };
 
-    let tokens_text = Span::styled(
-        format!(
-            "Tokens: {} in / {} out (Total: {}) ",
-            app.total_prompt_tokens, app.total_completion_tokens, app.total_tokens
-        ),
-        Style::default().fg(theme.text_dim),
-    );
+    let limit = app.providers_reg.get_active_provider().context_window.unwrap_or(128_000) as u64;
+    let pct = if limit > 0 {
+        ((app.total_tokens as f64 / limit as f64) * 100.0).min(100.0) as usize
+    } else {
+        0
+    };
+    let gauge_blocks = 8;
+    let filled = (pct * gauge_blocks) / 100;
+    let empty = gauge_blocks.saturating_sub(filled);
+    let bar_str = format!("[{}{}]", "█".repeat(filled), "░".repeat(empty));
+    let gauge_color = if pct > 85 {
+        theme.error
+    } else if pct > 60 {
+        theme.warning
+    } else {
+        theme.success
+    };
 
-    let layout = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([
-            Constraint::Min(25),
-            Constraint::Length(38),
-            Constraint::Length(35),
+    let token_line = if area.width >= 115 {
+        Line::from(vec![
+            Span::styled("Ctx ", Style::default().fg(theme.text_dim)),
+            Span::styled(bar_str, Style::default().fg(gauge_color).add_modifier(Modifier::BOLD)),
+            Span::styled(format!(" {}% │ ", pct), Style::default().fg(gauge_color)),
+            Span::styled(
+                format!("Tok: {} in / {} out ", app.total_prompt_tokens, app.total_completion_tokens),
+                Style::default().fg(theme.text_dim),
+            ),
         ])
-        .split(area);
+    } else if area.width >= 80 {
+        Line::from(vec![
+            Span::styled("Ctx ", Style::default().fg(theme.text_dim)),
+            Span::styled(format!("{}% ", pct), Style::default().fg(gauge_color).add_modifier(Modifier::BOLD)),
+            Span::styled(format!("({} tok) ", app.total_tokens), Style::default().fg(theme.text_dim)),
+        ])
+    } else {
+        Line::from(vec![])
+    };
+
+    let layout = if area.width >= 115 {
+        Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([
+                Constraint::Min(25),
+                Constraint::Length(38),
+                Constraint::Length(45),
+            ])
+            .split(area)
+    } else if area.width >= 80 {
+        Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([
+                Constraint::Min(20),
+                Constraint::Length(38),
+                Constraint::Length(22),
+            ])
+            .split(area)
+    } else {
+        Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([
+                Constraint::Min(10),
+                Constraint::Length(0),
+                Constraint::Length(0),
+            ])
+            .split(area)
+    };
 
     let status_para = Paragraph::new(status_line);
     let telemetry_para = Paragraph::new(render_footer_telemetry_line(app.metrics.as_ref()))
         .alignment(Alignment::Center);
-    let token_para = Paragraph::new(Line::from(tokens_text)).alignment(Alignment::Right);
+    let token_para = Paragraph::new(token_line).alignment(Alignment::Right);
 
     frame.render_widget(status_para, layout[0]);
-    frame.render_widget(telemetry_para, layout[1]);
-    frame.render_widget(token_para, layout[2]);
+    if area.width >= 80 {
+        frame.render_widget(telemetry_para, layout[1]);
+        frame.render_widget(token_para, layout[2]);
+    }
 }
 
 fn render_slash_popup(frame: &mut Frame, app: &App, input_area: Rect, theme: &Theme) {
@@ -1493,3 +1935,216 @@ fn render_permission_modal(frame: &mut Frame, app: &App, area: Rect, theme: &The
 
     frame.render_widget(modal_widget, modal_area);
 }
+
+fn render_command_palette(frame: &mut Frame, area: Rect, theme: &Theme) {
+    let modal_width = 68.min(area.width.saturating_sub(4));
+    let modal_height = 18.min(area.height.saturating_sub(2));
+    let modal_x = (area.width.saturating_sub(modal_width)) / 2;
+    let modal_y = (area.height.saturating_sub(modal_height)) / 2;
+
+    let modal_area = Rect {
+        x: modal_x,
+        y: modal_y,
+        width: modal_width,
+        height: modal_height,
+    };
+
+    frame.render_widget(Clear, modal_area);
+
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(3), // Search input
+            Constraint::Min(4),    // Command list
+        ])
+        .split(modal_area);
+
+    let query = get_palette_query();
+    let search_bar = Paragraph::new(Line::from(vec![
+        Span::styled(" 🔍 ", Style::default().fg(theme.primary).add_modifier(Modifier::BOLD)),
+        if query.is_empty() {
+            Span::styled(
+                "Ketik untuk mencari aksi (Esc tutup, ↑/↓ navigasi, Enter pilih)...",
+                Style::default().fg(theme.text_dim).add_modifier(Modifier::ITALIC),
+            )
+        } else {
+            Span::styled(
+                &query,
+                Style::default()
+                    .fg(theme.text_bright)
+                    .add_modifier(Modifier::BOLD),
+            )
+        },
+    ]))
+    .block(
+        Block::default()
+            .borders(Borders::ALL)
+            .border_type(BorderType::Rounded)
+            .border_style(Style::default().fg(theme.border_focused))
+            .title(Span::styled(
+                " ⚡ COMMAND PALETTE (Ctrl+P / F8) ",
+                Style::default()
+                    .fg(theme.primary)
+                    .add_modifier(Modifier::BOLD),
+            )),
+    );
+
+    frame.render_widget(search_bar, chunks[0]);
+
+    let filtered = get_filtered_palette_commands();
+    let sel_idx = SELECTED_PALETTE_INDEX.load(Ordering::Relaxed);
+
+    let items: Vec<ListItem> = if filtered.is_empty() {
+        vec![ListItem::new(Line::from(vec![
+            Span::styled(
+                "   Tidak ada perintah yang cocok.",
+                Style::default()
+                    .fg(theme.text_dim)
+                    .add_modifier(Modifier::ITALIC),
+            ),
+        ]))]
+    } else {
+        filtered
+            .iter()
+            .enumerate()
+            .map(|(idx, cmd)| {
+                let is_sel = idx == sel_idx;
+                let (prefix, bg, fg, key_style) = if is_sel {
+                    (
+                        " ▶ ",
+                        theme.highlight_bg,
+                        theme.text_bright,
+                        Style::default()
+                            .fg(theme.accent)
+                            .add_modifier(Modifier::BOLD),
+                    )
+                } else {
+                    (
+                        "   ",
+                        Color::Reset,
+                        theme.text_main,
+                        Style::default().fg(theme.text_dim),
+                    )
+                };
+
+                let line = Line::from(vec![
+                    Span::styled(
+                        prefix,
+                        Style::default()
+                            .fg(theme.primary)
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                    Span::styled(format!("{} ", cmd.icon), Style::default()),
+                    Span::styled(
+                        format!("{:<38}", cmd.title),
+                        Style::default().fg(fg).add_modifier(if is_sel {
+                            Modifier::BOLD
+                        } else {
+                            Modifier::empty()
+                        }),
+                    ),
+                    Span::styled(format!("[{:>6}]", cmd.shortcut), key_style),
+                ]);
+
+                ListItem::new(line).style(Style::default().bg(bg))
+            })
+            .collect()
+    };
+
+    let list = List::new(items).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .border_type(BorderType::Rounded)
+            .border_style(Style::default().fg(theme.border_normal)),
+    );
+
+    frame.render_widget(list, chunks[1]);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_theme_presets_and_cycling() {
+        assert_eq!(get_theme_count(), 5);
+
+        // Cycle through themes
+        let initial_theme = get_current_theme_name();
+        let cycled = cycle_theme();
+        assert_ne!(initial_theme, cycled);
+
+        // Explicit set by name
+        assert_eq!(set_theme_by_name("cyberpunk"), Some("Cyberpunk Matrix"));
+        assert_eq!(get_current_theme_name(), "Cyberpunk Matrix");
+
+        assert_eq!(set_theme_by_name("gruvbox"), Some("Gruvbox Dark"));
+        assert_eq!(get_current_theme_name(), "Gruvbox Dark");
+
+        assert_eq!(set_theme_by_name("catppuccin"), Some("Catppuccin Mocha"));
+        assert_eq!(get_current_theme_name(), "Catppuccin Mocha");
+
+        assert_eq!(set_theme_by_name("monokai"), Some("Monokai Pro"));
+        assert_eq!(get_current_theme_name(), "Monokai Pro");
+
+        assert_eq!(set_theme_by_name("tokyo"), Some("Tokyo Night"));
+        assert_eq!(get_current_theme_name(), "Tokyo Night");
+
+        assert_eq!(set_theme_by_name("non_existent_theme"), None);
+    }
+
+    #[test]
+    fn test_zen_mode_toggle() {
+        let initial = is_sidebar_collapsed();
+        let toggled = toggle_sidebar();
+        assert_eq!(toggled, !initial);
+        assert_eq!(is_sidebar_collapsed(), toggled);
+        // Toggle back
+        let reverted = toggle_sidebar();
+        assert_eq!(reverted, initial);
+    }
+
+    #[test]
+    fn test_thought_folding_toggle() {
+        let initial = is_thought_process_folded();
+        let toggled = toggle_thought_folding();
+        assert_eq!(toggled, !initial);
+        assert_eq!(is_thought_process_folded(), toggled);
+        // Toggle back
+        let reverted = toggle_thought_folding();
+        assert_eq!(reverted, initial);
+    }
+
+    #[test]
+    fn test_command_palette_filtering_and_actions() {
+        assert!(!is_command_palette_open());
+        toggle_command_palette();
+        assert!(is_command_palette_open());
+
+        let all_cmds = get_filtered_palette_commands();
+        assert_eq!(all_cmds.len(), PALETTE_COMMANDS.len());
+
+        // Test search query
+        palette_append_char('z');
+        palette_append_char('e');
+        palette_append_char('n');
+        let filtered = get_filtered_palette_commands();
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(filtered[0].action_id, "zen");
+
+        // Test navigation
+        palette_move_down();
+        palette_move_up();
+
+        // Test backspace
+        palette_backspace();
+        palette_backspace();
+        palette_backspace();
+        assert_eq!(get_palette_query(), "");
+
+        close_command_palette();
+        assert!(!is_command_palette_open());
+    }
+}
+
+
