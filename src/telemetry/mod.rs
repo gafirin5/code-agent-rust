@@ -346,12 +346,42 @@ static GLOBAL_CPU_SAMPLER: std::sync::Mutex<Option<CpuSampler>> = std::sync::Mut
 
 /// Unified entrypoint to capture process metrics using the internal global CPU sampler.
 pub fn capture_metrics(ctrl_dir: Option<&Path>) -> ProcessMetrics {
-    let mut lock = GLOBAL_CPU_SAMPLER.lock().unwrap_or_else(|e| e.into_inner());
-    let sampler = lock.get_or_insert_with(CpuSampler::new);
-    capture_metrics_with_cpu(ctrl_dir, sampler)
+    let (rss_bytes, peak_rss_bytes, virtual_bytes) = platform::get_memory();
+    let (user_ms, kernel_ms) = platform::get_cpu_times();
+    let cpu = {
+        let mut lock = GLOBAL_CPU_SAMPLER.lock().unwrap_or_else(|e| e.into_inner());
+        let sampler = lock.get_or_insert_with(CpuSampler::new);
+        sampler.sample(user_ms, kernel_ms)
+    };
+    let active_threads = platform::get_active_threads();
+    let process_handles = platform::get_process_handles();
+    let storage = calculate_storage_metrics(ctrl_dir);
+
+    let timestamp = std::time::SystemTime::now()
+        .duration_since(std::time::SystemTime::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+
+    ProcessMetrics {
+        memory: MemoryMetrics {
+            rss_bytes,
+            peak_rss_bytes,
+            virtual_bytes,
+            formatted_rss: format_bytes(rss_bytes),
+            formatted_peak: format_bytes(peak_rss_bytes),
+        },
+        cpu,
+        threads: ThreadMetrics {
+            active_threads,
+            process_handles,
+        },
+        storage,
+        timestamp,
+    }
 }
 
 /// Unified entrypoint to capture process metrics using a caller-provided stateful CPU sampler.
+#[allow(dead_code)]
 pub fn capture_metrics_with_cpu(
     ctrl_dir: Option<&Path>,
     sampler: &mut CpuSampler,

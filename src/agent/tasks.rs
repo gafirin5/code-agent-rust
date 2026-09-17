@@ -7,7 +7,7 @@ use std::panic::{self, AssertUnwindSafe};
 use std::str::FromStr;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{
-    Arc, Condvar, Mutex, MutexGuard, OnceLock, RwLock, RwLockReadGuard, RwLockWriteGuard,
+    mpsc, Arc, Condvar, Mutex, MutexGuard, OnceLock, RwLock, RwLockReadGuard, RwLockWriteGuard,
 };
 use std::thread;
 use std::time::{Duration, Instant, SystemTime};
@@ -448,6 +448,123 @@ pub fn format_duration_human(duration: Duration) -> String {
 // ============================================================================
 // 5. TaskLogBuffer & Output Isolation
 // ============================================================================
+// 4a. EventBroadcaster (Server-Sent Events fan-out)
+// ============================================================================
+
+type SubscriberEntry = (usize, mpsc::SyncSender<String>);
+
+/// Fan-out event broadcaster delivering real-time task status transitions,
+/// execution logs, and keepalive pings to connected SSE subscribers.
+#[derive(Clone, Debug)]
+pub struct EventBroadcaster {
+    subscribers: Arc<Mutex<Vec<SubscriberEntry>>>,
+    channel_capacity: usize,
+    next_id: Arc<AtomicUsize>,
+}
+
+impl Default for EventBroadcaster {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl EventBroadcaster {
+    pub const DEFAULT_CAPACITY: usize = 64;
+
+    /// Creates a new EventBroadcaster with default bounded channel capacity (64).
+    pub fn new() -> Self {
+        Self::with_capacity(Self::DEFAULT_CAPACITY)
+    }
+
+    /// Creates a new EventBroadcaster with the specified channel capacity per subscriber.
+    pub fn with_capacity(capacity: usize) -> Self {
+        Self {
+            subscribers: Arc::new(Mutex::new(Vec::new())),
+            channel_capacity: capacity,
+            next_id: Arc::new(AtomicUsize::new(1)),
+        }
+    }
+
+    /// Subscribes a new client to the event stream, returning the receiver.
+    pub fn subscribe(&self) -> mpsc::Receiver<String> {
+        let (_id, rx) = self.subscribe_with_id();
+        rx
+    }
+
+    /// Subscribes a new client to the event stream, returning a unique subscriber ID and receiver.
+    pub fn subscribe_with_id(&self) -> (usize, mpsc::Receiver<String>) {
+        let (tx, rx) = mpsc::sync_channel(self.channel_capacity);
+        let id = self.next_id.fetch_add(1, Ordering::SeqCst);
+        let mut subs = self.subscribers.lock().unwrap_or_else(|e| e.into_inner());
+        subs.push((id, tx));
+        (id, rx)
+    }
+
+    /// Unsubscribes a client by its unique subscriber ID.
+    pub fn unsubscribe(&self, id: usize) {
+        let mut subs = self.subscribers.lock().unwrap_or_else(|e| e.into_inner());
+        subs.retain(|(sub_id, _)| *sub_id != id);
+    }
+
+    /// Broadcasts a formatted message to all subscribers non-blockingly via try_send.
+    /// Drops message on full buffer (never blocks worker threads) and prunes disconnected subscribers.
+    pub fn broadcast(&self, msg: &str) {
+        let mut subs = self.subscribers.lock().unwrap_or_else(|e| e.into_inner());
+        subs.retain(|(_, tx)| {
+            match tx.try_send(msg.to_string()) {
+                Ok(()) => true,
+                Err(mpsc::TrySendError::Full(_)) => {
+                    // Channel buffer is full: drop message to protect publisher thread
+                    true
+                }
+                Err(mpsc::TrySendError::Disconnected(_)) => {
+                    // Subscriber disconnected: prune
+                    false
+                }
+            }
+        });
+    }
+
+    /// Broadcasts a task status transition event formatted as `{"id": "...", "status": "..."}`.
+    pub fn broadcast_task_status(&self, snapshot: &TaskSnapshot) {
+        self.broadcast_status(&snapshot.id, snapshot.status.as_str());
+    }
+
+    /// Broadcasts a task status transition event by task ID and status string.
+    pub fn broadcast_status(&self, id: &str, status: &str) {
+        let data = serde_json::json!({
+            "id": id,
+            "status": status,
+        });
+        let frame = format!("event: task_status\ndata: {}\n\n", data);
+        self.broadcast(&frame);
+    }
+
+    /// Broadcasts a task execution log chunk.
+    pub fn broadcast_task_log(&self, task_id: &str, chunk: &str) {
+        let data = serde_json::json!({
+            "id": task_id,
+            "chunk": chunk,
+        });
+        let frame = format!("event: task_log\ndata: {}\n\n", data);
+        self.broadcast(&frame);
+    }
+
+    /// Broadcasts an SSE keep-alive ping.
+    pub fn broadcast_ping(&self) {
+        self.broadcast(": ping\n\n");
+    }
+
+    /// Returns the number of active subscribers.
+    pub fn subscriber_count(&self) -> usize {
+        let subs = self.subscribers.lock().unwrap_or_else(|e| e.into_inner());
+        subs.len()
+    }
+}
+
+// ============================================================================
+// 4b. TaskLogBuffer
+// ============================================================================
 
 /// Thread-safe in-memory log buffer capturing subagent log output, preventing
 /// interlaced stdout corruption in concurrent multi-subagent scenarios, and
@@ -456,6 +573,8 @@ pub fn format_duration_human(duration: Duration) -> String {
 pub struct TaskLogBuffer {
     lines: Arc<RwLock<Vec<String>>>,
     disk_path: Arc<RwLock<Option<std::path::PathBuf>>>,
+    broadcaster: Arc<RwLock<Option<Arc<EventBroadcaster>>>>,
+    task_id: Arc<RwLock<Option<String>>>,
 }
 
 impl TaskLogBuffer {
@@ -463,6 +582,8 @@ impl TaskLogBuffer {
         Self {
             lines: Arc::new(RwLock::new(Vec::new())),
             disk_path: Arc::new(RwLock::new(None)),
+            broadcaster: Arc::new(RwLock::new(None)),
+            task_id: Arc::new(RwLock::new(None)),
         }
     }
 
@@ -471,6 +592,8 @@ impl TaskLogBuffer {
         Self {
             lines: Arc::new(RwLock::new(Vec::new())),
             disk_path: Arc::new(RwLock::new(Some(path.into()))),
+            broadcaster: Arc::new(RwLock::new(None)),
+            task_id: Arc::new(RwLock::new(None)),
         }
     }
 
@@ -480,7 +603,13 @@ impl TaskLogBuffer {
         *guard = Some(path.into());
     }
 
-    /// Appends a log line to the in-memory buffer and to disk if configured.
+    /// Configures the broadcaster and task ID for streaming logs over SSE.
+    pub fn set_broadcaster(&self, task_id: impl Into<String>, broadcaster: Arc<EventBroadcaster>) {
+        *self.task_id.write().unwrap_or_else(|e| e.into_inner()) = Some(task_id.into());
+        *self.broadcaster.write().unwrap_or_else(|e| e.into_inner()) = Some(broadcaster);
+    }
+
+    /// Appends a log line to the in-memory buffer, to disk if configured, and to the broadcaster.
     pub fn push(&self, line: impl Into<String>) {
         let s = line.into();
         {
@@ -505,6 +634,20 @@ impl TaskLogBuffer {
                 use std::io::Write;
                 let _ = writeln!(file, "{}", s);
             }
+        }
+
+        let broadcaster_opt = self
+            .broadcaster
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
+        let task_id_opt = self
+            .task_id
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
+        if let (Some(b), Some(id)) = (broadcaster_opt, task_id_opt) {
+            b.broadcast_task_log(&id, &s);
         }
     }
 
@@ -869,6 +1012,15 @@ impl TaskSnapshot {
     }
 }
 
+/// Emits terminal bell alert character if alert_enabled is true.
+pub fn emit_task_completion_alert(alert_enabled: bool) -> String {
+    if alert_enabled {
+        "\x07".to_string()
+    } else {
+        String::new()
+    }
+}
+
 /// Internal mutable synchronized task state.
 #[derive(Debug)]
 pub struct TaskRecord {
@@ -1111,6 +1263,7 @@ pub struct TaskManager {
     tasks: Arc<RwLock<HashMap<String, Arc<TaskInner>>>>,
     persist_dir: Arc<RwLock<Option<std::path::PathBuf>>>,
     file_lock: Arc<Mutex<()>>,
+    broadcaster: Arc<EventBroadcaster>,
 }
 
 impl Default for TaskManager {
@@ -1128,6 +1281,7 @@ impl TaskManager {
             tasks: Arc::new(RwLock::new(HashMap::new())),
             persist_dir: Arc::new(RwLock::new(default_dir.clone())),
             file_lock: Arc::new(Mutex::new(())),
+            broadcaster: Arc::new(EventBroadcaster::new()),
         };
         if let Some(ref dir) = default_dir {
             let tasks_file = dir.join("tasks.jsonl");
@@ -1171,6 +1325,7 @@ impl TaskManager {
             tasks: Arc::new(RwLock::new(HashMap::new())),
             persist_dir: Arc::new(RwLock::new(Some(dir.clone()))),
             file_lock: Arc::new(Mutex::new(())),
+            broadcaster: Arc::new(EventBroadcaster::new()),
         };
         let tasks_file = dir.join("tasks.jsonl");
         if tasks_file.exists() {
@@ -1201,6 +1356,7 @@ impl TaskManager {
             tasks: Arc::new(RwLock::new(HashMap::new())),
             persist_dir: Arc::new(RwLock::new(Some(dir))),
             file_lock: Arc::new(Mutex::new(())),
+            broadcaster: Arc::new(EventBroadcaster::new()),
         };
 
         if tasks_file.exists() {
@@ -1208,6 +1364,16 @@ impl TaskManager {
         }
 
         Ok(tm)
+    }
+
+    /// Accesses the EventBroadcaster for Server-Sent Events fan-out.
+    pub fn broadcaster(&self) -> Arc<EventBroadcaster> {
+        self.broadcaster.clone()
+    }
+
+    /// Alias for `broadcaster`.
+    pub fn event_broadcaster(&self) -> Arc<EventBroadcaster> {
+        self.broadcaster()
     }
 
     /// Runs a closure with a scoped thread-local tasks persistence directory.
@@ -1231,8 +1397,9 @@ impl TaskManager {
         *p = dir;
     }
 
-    /// Appends a snapshot line to tasks.jsonl if persistence is active.
+    /// Appends a snapshot line to tasks.jsonl if persistence is active, and broadcasts status transition.
     pub fn persist_snapshot(&self, snapshot: &TaskSnapshot) -> anyhow::Result<()> {
+        self.broadcaster.broadcast_task_status(snapshot);
         let dir_opt = self
             .persist_dir
             .read()
@@ -1258,13 +1425,14 @@ impl TaskManager {
         Self::global().persist_snapshot(snapshot)
     }
 
-    /// Appends a log line to a task's in-memory buffer and/or disk file.
+    /// Appends a log line to a task's in-memory buffer and/or disk file, and broadcasts to listeners.
     pub fn append_task_log(&self, id: &str, log_line: &str) -> anyhow::Result<()> {
         if let Some(task) = self.get_inner(id) {
             task.log_buffer.push(log_line);
             return Ok(());
         }
 
+        self.broadcaster.broadcast_task_log(id, log_line);
         let dir_opt = self
             .persist_dir
             .read()
@@ -1495,6 +1663,7 @@ impl TaskManager {
             Some(p) => Arc::new(TaskLogBuffer::with_disk_path(p)),
             None => Arc::new(TaskLogBuffer::new()),
         };
+        logs.set_broadcaster(id.clone(), self.broadcaster.clone());
 
         let record = TaskRecord::new_with_dependencies(
             id.clone(),
@@ -3687,5 +3856,11 @@ mod tests {
         let snap_d = manager.await_task(&id_d, None).unwrap();
         assert_eq!(snap_d.status, TaskStatus::Cancelled);
         assert!(!d_ran.load(Ordering::SeqCst), "Task D must not have executed its runner");
+    }
+
+    #[test]
+    fn test_emit_task_completion_alert() {
+        assert_eq!(emit_task_completion_alert(true), "\x07");
+        assert_eq!(emit_task_completion_alert(false), "");
     }
 }

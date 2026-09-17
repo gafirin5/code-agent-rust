@@ -6,9 +6,9 @@
 
 [![Version](https://img.shields.io/badge/Version-0.3.0-blue)]()
 [![Rust](https://img.shields.io/badge/Built%20with-Rust-orange?logo=rust)](https://www.rust-lang.org/)
-[![Binary Size](https://img.shields.io/badge/Binary-~1.8%20MB-brightgreen)]()
-[![RAM Idle](https://img.shields.io/badge/RAM%20Idle-<25%20MB-brightgreen)]()
-[![Tests](https://img.shields.io/badge/Tests-320%2B%20Passing-success)]()
+[![Binary Size](https://img.shields.io/badge/Binary-~3.2%20MB-brightgreen)]()
+[![RAM Idle](https://img.shields.io/badge/RAM%20Idle-<30%20MB-brightgreen)]()
+[![Tests](https://img.shields.io/badge/Tests-340%2B%20Passing-success)]()
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![OpenAI Compatible](https://img.shields.io/badge/API-OpenAI%20Compatible-412991?logo=openai)]()
 
@@ -106,16 +106,35 @@ Buka `.env` dan pilih salah satu konfigurasi penyedia AI berikut:
 >   ```
 
 #### Langkah 3: Jalankan!
-```bash
-cargo run
-```
+
+Pilih mode yang kamu sukai:
+
+- **Mode Modern TUI (Visual, Rapi & Elegan — Sangat Direkomendasikan)**:
+  ```powershell
+  # Dari root workspace:
+  .\tui        # Windows PowerShell (instan)
+  tui          # Windows Command Prompt (instan)
+  ./tui.sh     # Linux / macOS / Git Bash
+
+  # Atau dari folder ctrl-cli:
+  cargo tui
+  # atau
+  ctrl-cli -t
+  ```
+
+- **Mode Classic Chat (REPL teks konsol)**:
+  ```bash
+  cargo run
+  # atau
+  ctrl-cli --cli
+  ```
 *Selesai! Terminal siap diajak ngobrol dan coding bersama.* 🎉
 
 > 💡 **Tips Pasang Permanen**: Ingin bisa mengetik `ctrl-cli` dari folder mana saja tanpa `cargo run`?
 > ```bash
 > cargo install --path . --force
 > ```
-> Sekarang cukup ketik `ctrl-cli` di terminal mana pun!
+> Sekarang cukup ketik `ctrl-cli -t` (untuk TUI) atau `ctrl-cli` di terminal mana pun!
 
 ---
 
@@ -128,7 +147,7 @@ Berikut gambaran alur saat kamu menggunakan `ctrl-cli`:
  🤖 ctrl-cli REPL (AI Coding Agent v0.3.0)
  Active Model: llama-3.3-70b-versatile
  Ketik pesanmu dan tekan Enter.
- Ketik `/` untuk melihat menu perintah cepat.
+ Ketik 'tui' untuk grafis TUI, '/' untuk menu cepat.
 ══════════════════════════════════════════════════════════════
 
 [llama-3.3-70b] ➜ buatkan fungsi hitung diskon bertingkat di file src/discount.rs
@@ -143,6 +162,9 @@ Berikut gambaran alur saat kamu menggunakan `ctrl-cli`:
 
 [llama-3.3-70b] ➜ /undo
 ⏪ Perubahan dibatalkan! File src/discount.rs dikembalikan ke versi sebelumnya.
+
+[llama-3.3-70b] ➜ tui
+🖥️ Beralih ke antarmuka grafis Ratatui TUI modern...
 ```
 
 ---
@@ -153,10 +175,10 @@ Berikut gambaran alur saat kamu menggunakan `ctrl-cli`:
 
 | Mode | Cara Menjalankan | Kapan Cocok Digunakan? |
 | :--- | :--- | :--- |
-| **1. 💬 Chat Terminal (REPL)** | `cargo run` (atau `ctrl-cli`) | **Default & Paling Santai.** Mengobrol santai layaknya di ChatGPT, langsung di terminalmu. |
-| **2. 🖥️ Visual Terminal (TUI)** | `ctrl-cli-tui` (atau ketik `/tui`) | **Penggemar Vim / Htop.** Tampilan layar penuh dengan panel chat, monitor task latar belakang, dan skill selector. |
-| **3. 🌐 Web Browser** | `cargo run -- serve` | **Tampilan Grafis Browser.** Buka `http://127.0.0.1:3000` di Chrome/Firefox untuk memantau proses secara visual. |
-| **4. ⚡ Sekali Jalan (One-Shot)** | `cargo run -- generate "..."` | **Scripting / Automasi.** Menghasilkan kode atau jawaban instan langsung ke file tanpa masuk sesi chat. |
+| **1. 🖥️ Visual Terminal (TUI)** | `.\tui` / `cargo tui` / `ctrl-cli -t` / ketik `tui` di REPL | **Paling Direkomendasikan & Modern.** Tampilan fullscreen dengan tema Nord/Tokyo Night, pesan berbingkai kartu, syntax highlighting native + ikon bahasa, live animated spinner, preview output tool multi-baris, dan sidebar interaktif (F1–F4). |
+| **2. 💬 Chat Terminal (REPL)** | `cargo run` (atau `ctrl-cli --cli`) | **Classic & Ringan.** Mengobrol santai baris-per-baris dengan auto-completion `/` dan hot-switch ke TUI kapan saja tanpa memutus sesi. |
+| **3. 🌐 Web Browser** | `cargo run -- serve` | **Tampilan Grafis Browser.** Buka `http://127.0.0.1:3000` di Chrome/Firefox untuk memantau proses secara visual via REST & SSE. |
+| **4. ⚡ Sekali Jalan (One-Shot)** | `cargo run -- generate "..."` | **Scripting / Automasi.** Menghasilkan kode atau jawaban instan langsung ke file tanpa masuk sesi chat interaktif. |
 
 #### Contoh Perintah Sekali Jalan (One-Shot):
 ```bash
@@ -179,11 +201,12 @@ Saat berada di dalam mode chat (REPL), ketik `/` lalu gunakan tombol panah keybo
 | **/undo** | ⏪ **Batalkan perubahan file terakhir** (kembali ke snapshot sebelum diedit). |
 | **/diff** | 🔍 Tampilkan perbandingan baris kode yang baru saja dimodifikasi. |
 | **/check** | 🩺 Jalankan compiler / linter untuk memastikan tidak ada syntax error. |
-| **/tui** | 🖥️ Pindah seketika ke tampilan antarmuka visual layar penuh (*Fullscreen TUI*). |
+| **/tui** | 🖥️ Pindah seketika ke tampilan TUI visual (atau cukup ketik `tui` / `:tui`). |
 | **/model** | 🔄 Ganti model AI yang sedang aktif (misal beralih ke DeepSeek atau GPT-4o). |
 | **/skill** | 🎭 Aktifkan persona spesialis (Rust Expert, Reviewer, Debugger, dll.). |
 | **/tokens** | 📊 Cek kapasitas memori percakapan dan konsumsi token saat ini. |
 | **/compact** | 🧹 Ringkas riwayat obrolan panjang untuk menghemat pemakaian token. |
+| **/profile** | 👤 Pengaturan profil, bahasa komunikasi, dan antarmuka default (TUI vs CLI). |
 | **/clear** | 🧼 Bersihkan tampilan layar terminal. |
 | **/exit** | 🚪 Keluar dari aplikasi. |
 
@@ -300,30 +323,43 @@ Keamanan kode sumber kamu adalah prioritas utama di `ctrl-cli`:
 
 ---
 
-### 🖥️ 11. Panduan Lengkap TUI Fullscreen & Keybindings
+### 🖥️ 11. Panduan Lengkap TUI Modern & Cara Mudah Menjalankan
 
-Mode TUI (*Terminal User Interface*) menghadirkan pengalaman antarmuka visual penuh ala *Vim/Neovim/Htop* berbasis pustaka [Ratatui](https://ratatui.rs/).
+Mode **TUI (*Terminal User Interface*)** pada `ctrl-cli` menghadirkan pengalaman visual modern berbasis pustaka [Ratatui](https://ratatui.rs/) dan [Crossterm](https://github.com/crossterm-rs/crossterm) dengan tema **Nord / Tokyo Night Dark** yang elegan, ringan, dan responsif.
 
-#### Cara Membuka TUI:
-```bash
-# Langsung dari terminal:
-ctrl-cli-tui
+#### 🚀 6 Cara Mudah Menjalankan Mode TUI:
+1. **Script Satu Kata di Root Workspace (Paling Cepat & Instan)**:
+   - **PowerShell**: `.\tui` atau `.\tui.ps1`
+   - **Command Prompt (CMD)**: `tui`
+   - **Linux / macOS / Git Bash**: `./tui.sh`
+   *(Otomatis mengeksekusi biner release terkompilasi tanpa jeda compile).*
+2. **Cargo Alias**: Cukup ketik `cargo tui` dari dalam folder `ctrl-cli/`.
+3. **Short Flag CLI**: Jalankan `ctrl-cli -t` (atau `cargo run -- -t`).
+4. **Jadikan Default Permanen**: Buka `/profile` di REPL -> pilih `🖥️ Pilih Mode Default` -> set ke `TUI`. Selanjutnya cukup jalankan `ctrl-cli` polos tanpa argumen apa pun!
+5. **Environment Variable**: Set `$env:CTRL_TUI="1"` (PowerShell) atau `export CTRL_TUI=1` (Bash).
+6. **Quick-Switch dari REPL**: Cukup ketik `tui` atau `:tui` di prompt percakapan REPL tanpa awalan slash.
 
-# Atau dari dalam REPL:
-Ketik /tui lalu tekan Enter
-```
+#### 🎨 Fitur Visual Unggulan TUI:
+* **Header Bar Pill Modern**: Inverted badge `⚡ CTRL-CLI`, pill status provider, model aktif, ikon spesialisasi persona, dan live animated thinking spinner (`⠋ ⠙ ⠹...`).
+* **Card-Based Message Framing**: Pesan berbingkai rapi (`╭─ 👤 You`, `╭─ 🤖 Assistant`, `╭─ 💭 Thought Process`).
+* **Native Syntax Highlighting**: Blok kode Markdown otomatis diberi warna kata kunci, penomoran baris, dan badge ikon bahasa (`🦀 Rust`, `🐍 Python`, `📘 TypeScript`, `🐚 Shell`, dll.) tanpa dependensi parser berat eksternal.
+* **Multi-Line Tool Previews**: Cuplikan hasil eksekusi tool terstruktur (hingga 6 baris) dengan badge status `✔ SUKSES` / `✖ GAGAL` dan indikator lipatan baris `... (+N baris disembunyikan)`.
+* **Scrollbar Visual**: Widget scrollbar vertikal Ratatui di sisi kanan jendela obrolan saat riwayat percakapan panjang.
+* **Sidebar Tabbed (F1–F4)**:
+  * **`F1` Help**: Panduan pintasan keyboard & perintah slash populer.
+  * **`F2` Tasks**: Pemantauan background task dengan status badge (`● RUNNING`, `✔ DONE`, `✖ GAGAL`) dan log output bergaris vertikal.
+  * **`F3` Skills**: Pilihan peran AI dengan penanda `★ [ACTIVE]`.
+  * **`F4` Provider**: Ringkasan konfigurasi model dan endpoint URL.
+* **Focus Glow & Placeholder**: Border fokus menyala saat input aktif, placeholder miring dinamis, prompt `❯ `, dan penghitung karakter di kanan bawah.
 
 #### 🎮 Daftar Pintasan Keyboard (Keybindings):
-* **`Tab` / `Shift + Tab`**: Berpindah fokus antar panel (**Riwayat Chat** ↔ **Input Teks** ↔ **Sidebar Status**).
-* **`F1`**: Membuka panel panduan bantuan (*Help*).
-* **`F2`**: Membuka panel **Tasks** (memantau subagent di background; tekan `c` untuk batalkan, `x` untuk membersihkan).
-* **`F3`**: Membuka panel **Skills** (gunakan panah `↑`/`↓` dan `Enter` untuk memilih persona).
-* **`F4`**: Membuka panel **Model & Provider** (ganti model AI langsung dari sidebar).
-* **`F5`**: 🔄 **Beralih kembali ke mode REPL biasa** tanpa memutus sesi percakapan.
-* **`Esc`**: Membatalkan eksekusi yang sedang berlangsung / menutup popup autocomplete.
+* **`Tab` / `Shift + Tab`**: Berpindah fokus antar panel (**Input Teks** ↔ **Chat** ↔ **Sidebar**).
+* **`F1` / `F2` / `F3` / `F4`**: Beralih langsung antar tab Sidebar (Help, Tasks, Skills, Provider).
+* **`F5`**: 🔄 **Beralih kembali ke mode REPL konsol biasa** seketika tanpa memutus sesi.
+* **`PageUp` / `PageDown`**: Menggulir riwayat pesan ke atas dan ke bawah secara halus.
+* **`Esc`**: Membatalkan eksekusi yang sedang berlangsung / menutup popup autokomplet.
 * **`Ctrl + L`**: Membersihkan layar obrolan.
 * **`Ctrl + Q`** atau **`Ctrl + C`**: Keluar dari aplikasi.
-* **Scroll Mouse**: Menggulir panel pesan ke atas dan ke bawah secara halus.
 
 ---
 
@@ -355,7 +391,8 @@ Agar AI selalu menyesuaikan diri dengan gaya coding dan bahasa yang kamu inginka
   "name": "Budi",
   "tech_stack": ["Rust", "Python", "TypeScript"],
   "response_language": "Bahasa Indonesia",
-  "coding_style": "Tulis kode yang bersih, idiomatik, beri penjelasan singkat, dan sertakan unit test."
+  "coding_style": "Tulis kode yang bersih, idiomatik, beri penjelasan singkat, dan sertakan unit test.",
+  "default_ui": "tui"
 }
 ```
 
@@ -384,8 +421,8 @@ Berdasarkan pengujian empiris performa (lihat dokumen lengkap [docs/PERFORMANCE.
 
 | Parameter Metrik | `ctrl-cli` (Rust Murni) | Tool AI Berbasis Electron/Node |
 | :--- | :--- | :--- |
-| **Ukuran File Biner** | **~1.8 MB** | ~150 MB – 300 MB |
-| **Konsumsi RAM (Idle)** | **< 25 MB** | 200 MB – 800 MB |
+| **Ukuran File Biner** | **~3.2 MB** (dengan TUI & Server) | ~150 MB – 300 MB |
+| **Konsumsi RAM (Idle)** | **< 30 MB** | 200 MB – 800 MB |
 | **Konsumsi RAM (Puncak)** | **< 60 MB** | 600 MB – 1.5 GB |
 | **Waktu Startup Terminal** | **< 15 ms** | 1.2 s – 3.5 s |
 | **Keamanan Memori** | **100% Memory-Safe** (Rust ownership) | Rawan garbage collection spikes |
@@ -416,11 +453,12 @@ code-agent-rust/
 │   │   └── mcp.rs            <-- Klien Model Context Protocol
 │   ├── tui/                  <-- Antarmuka terminal fullscreen Ratatui
 │   │   ├── app.rs            <-- State machine dan state loop TUI
-│   │   └── ui.rs             <-- Render tata letak panel visual
+│   │   ├── highlight.rs      <-- Native syntax highlighter & language icons
+│   │   └── ui.rs             <-- Render tata letak panel visual Nord/Tokyo Night
 │   ├── telemetry/            <-- Pemantauan CPU, RAM, & resource sistem
 │   └── bin/
 │       └── ctrl-cli-tui.rs   <-- File biner mandiri mode TUI
-├── tests/                    <-- 320+ unit test, integration test, & stress test
+├── tests/                    <-- 340+ unit test, integration test, & stress test
 └── docs/                     <-- Dokumentasi teknis mendalam
 ```
 
@@ -443,7 +481,7 @@ Ingin mempelajari dokumentasi spesifik untuk topik tertentu? Silakan kunjungi:
 
 ### 💡 What is ctrl-cli?
 
-`ctrl-cli` is an **ultra-lightweight (~1.8 MB)** autonomous AI coding assistant in your terminal, built with **100% pure Rust**. It can explore workspaces, surgically edit code, verify compiler errors (`cargo check`, python, tsc), and self-heal issues automatically.
+`ctrl-cli` is an **ultra-lightweight (~3.2 MB binary, < 30 MB RAM)** autonomous AI coding assistant in your terminal, built with **100% pure Rust**. It can explore workspaces, surgically edit code, verify compiler errors (`cargo check`, python, tsc), and self-heal issues automatically.
 
 #### 🚀 Quick Start (3 Minutes):
 1. **Clone & Enter**:
@@ -458,12 +496,19 @@ Ingin mempelajari dokumentasi spesifik untuk topik tertentu? Silakan kunjungi:
    Choose either free **Groq** (`AI_BASE_URL=https://api.groq.com/openai/v1`), offline **Ollama** (`AI_BASE_URL=http://localhost:11434/v1`), or **OpenAI / DeepSeek**.
 3. **Run**:
    ```bash
+   # Modern visual TUI:
+   .\tui       # PowerShell
+   tui         # CMD
+   ./tui.sh    # Bash
+   # or inside ctrl-cli: cargo tui
+
+   # Classic line REPL:
    cargo run
    ```
 
 #### 🎮 4 Operational Modes:
+* **Fullscreen Modern TUI**: `.\tui` / `cargo tui` / `ctrl-cli -t` (or type `tui` in REPL).
 * **Interactive REPL**: `cargo run` (chat with `/help`, `/undo`, `/diff`, `/model`, `/skill`).
-* **Fullscreen TUI**: `cargo run --bin ctrl-cli-tui` (or type `/tui` in REPL).
 * **Web Dashboard**: `cargo run -- serve` (visit `http://127.0.0.1:3000`).
 * **One-Shot Command**: `cargo run -- generate "prompt..."`.
 
@@ -475,7 +520,7 @@ For comprehensive technical architecture, tools reference, and benchmarks, check
 
 ### 💡 什么是 ctrl-cli？
 
-**`ctrl-cli`** 是完全采用 **纯 Rust 编写** 的极轻量终端 AI 编程助手与自主智能体（体积仅 ~1.8 MB，内存占用 < 25 MB）。具备文件精准手术式编辑、编译器错误自愈修复（Self-Healing）、自动快照撤销（`/undo`）以及多子任务并发处理能力。
+**`ctrl-cli`** 是完全采用 **纯 Rust 编写** 的极轻量终端 AI 编程助手与自主智能体（体积仅 ~3.2 MB，内存占用 < 30 MB）。具备文件精准手术式编辑、编译器错误自愈修复（Self-Healing）、自动快照撤销（`/undo`）以及多子任务并发处理能力。
 
 #### ⚡ 3 步极速上手：
 1. **克隆代码**：
@@ -486,6 +531,12 @@ For comprehensive technical architecture, tools reference, and benchmarks, check
 2. **配置密钥**：复制 `.env.example` 为 `.env`，填入 Groq（免费极速）、本地 Ollama（100% 离线隐私）或 OpenAI/DeepSeek 密钥。
 3. **启动运行**：
    ```bash
+   # 启动现代 TUI 界面：
+   .\tui        # PowerShell
+   tui          # CMD
+   cargo tui    # 在 ctrl-cli 目录
+
+   # 启动经典命令行交互：
    cargo run
    ```
 

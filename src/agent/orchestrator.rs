@@ -345,6 +345,13 @@ pub fn run_agent_loop(
                         args: args.clone(),
                     });
 
+                    let is_background = !sink.is_channel() && sink.is_silent();
+                    let tool_ctx = crate::tools::ToolExecutionContext {
+                        session_id: "agent_session".to_string(),
+                        task_id: None,
+                        is_background,
+                    };
+
                     // Defense-in-depth: if running in silent background mode (and not TUI channel), reject interactive prompts
                     let authorized = if !sink.is_channel()
                         && sink.is_silent()
@@ -357,6 +364,17 @@ pub fn run_agent_loop(
                     };
 
                     let tool_result_text = if !authorized {
+                        let record = crate::tools::audit::AuditRecord {
+                            timestamp: crate::agent::tasks::format_utc_timestamp(std::time::SystemTime::now()),
+                            session_id: tool_ctx.session_id.clone(),
+                            task_id: tool_ctx.task_id.clone(),
+                            tool: name.clone(),
+                            parameters: serde_json::from_str(args).unwrap_or_else(|_| serde_json::json!({ "raw": args })),
+                            status: "blocked".to_string(),
+                            duration_ms: 0,
+                        };
+                        let _ = crate::tools::audit::log_tool_invocation(&record);
+
                         if sink.is_silent() {
                             sink.emit("  └─ ⚠ Action rejected by user permission policy.");
                         } else {
@@ -370,6 +388,17 @@ pub fn run_agent_loop(
                         "Action was rejected by user permission policy.".to_string()
                     } else if name == "ask_user_question" && !sink.is_channel() && sink.is_silent()
                     {
+                        let record = crate::tools::audit::AuditRecord {
+                            timestamp: crate::agent::tasks::format_utc_timestamp(std::time::SystemTime::now()),
+                            session_id: tool_ctx.session_id.clone(),
+                            task_id: tool_ctx.task_id.clone(),
+                            tool: name.clone(),
+                            parameters: serde_json::from_str(args).unwrap_or_else(|_| serde_json::json!({ "raw": args })),
+                            status: "blocked".to_string(),
+                            duration_ms: 0,
+                        };
+                        let _ = crate::tools::audit::log_tool_invocation(&record);
+
                         // INTERACTIVE TOOL GUARD:
                         // Prevent background subagents from hijacking terminal stdin.
                         let err_msg = "Interactive tool 'ask_user_question' is disabled in background subagent mode. Proceed autonomously without interactive clarification.";
@@ -381,39 +410,41 @@ pub fn run_agent_loop(
                         });
                         format!("Error: {}", err_msg)
                     } else {
-                        match dispatch_tool(name, args) {
-                            Ok(res) => {
-                                total_tools_executed += 1;
-                                let first_line = res.lines().next().unwrap_or("Completed.");
-                                if sink.is_silent() {
-                                    sink.emit(&format!("  └─ ✔ {}", first_line));
-                                } else {
-                                    println!(
-                                        "  \x1B[32m└─ ✔\x1B[0m \x1B[37m{}\x1B[0m\n",
-                                        first_line
-                                    );
+                        crate::tools::with_tool_context(tool_ctx, || {
+                            match dispatch_tool(name, args) {
+                                Ok(res) => {
+                                    total_tools_executed += 1;
+                                    let first_line = res.lines().next().unwrap_or("Completed.");
+                                    if sink.is_silent() {
+                                        sink.emit(&format!("  └─ ✔ {}", first_line));
+                                    } else {
+                                        println!(
+                                            "  \x1B[32m└─ ✔\x1B[0m \x1B[37m{}\x1B[0m\n",
+                                            first_line
+                                        );
+                                    }
+                                    sink.send_event(AgentUiEvent::ToolFinished {
+                                        name: name.clone(),
+                                        result: first_line.to_string(),
+                                        success: true,
+                                    });
+                                    res
                                 }
-                                sink.send_event(AgentUiEvent::ToolFinished {
-                                    name: name.clone(),
-                                    result: first_line.to_string(),
-                                    success: true,
-                                });
-                                res
-                            }
-                            Err(e) => {
-                                if sink.is_silent() {
-                                    sink.emit(&format!("  └─ ✖ Error: {}", e));
-                                } else {
-                                    println!("  \x1B[31m└─ ✖ Error:\x1B[0m \x1B[31m{}\x1B[0m\n", e);
+                                Err(e) => {
+                                    if sink.is_silent() {
+                                        sink.emit(&format!("  └─ ✖ Error: {}", e));
+                                    } else {
+                                        println!("  \x1B[31m└─ ✖ Error:\x1B[0m \x1B[31m{}\x1B[0m\n", e);
+                                    }
+                                    sink.send_event(AgentUiEvent::ToolFinished {
+                                        name: name.clone(),
+                                        result: format!("Error: {}", e),
+                                        success: false,
+                                    });
+                                    format!("Tool execution failed: {}", e)
                                 }
-                                sink.send_event(AgentUiEvent::ToolFinished {
-                                    name: name.clone(),
-                                    result: format!("Error: {}", e),
-                                    success: false,
-                                });
-                                format!("Tool execution failed: {}", e)
                             }
-                        }
+                        })
                     };
 
                     conversation.push(ChatMessage::tool_result(

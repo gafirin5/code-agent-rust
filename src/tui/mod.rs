@@ -1,6 +1,9 @@
 pub mod app;
 pub mod event;
+pub mod highlight;
 pub mod ui;
+
+pub use highlight::highlight_markdown_code_blocks_ansi;
 
 use anyhow::Result;
 use crossterm::{

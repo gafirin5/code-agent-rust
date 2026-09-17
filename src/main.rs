@@ -17,6 +17,7 @@ use inquire::error::CustomUserError;
 use inquire::ui::{Color, RenderConfig, Styled};
 use inquire::{Confirm, InquireError, Select, Text};
 use serde::{Deserialize, Serialize};
+use std::borrow::Cow;
 use std::io::{IsTerminal, Write};
 use std::path::PathBuf;
 use types::{ChatMessage, Usage};
@@ -33,7 +34,7 @@ struct Cli {
     cli: bool,
 
     /// Explicitly launch the modern Terminal User Interface (TUI).
-    #[arg(long)]
+    #[arg(short = 't', long)]
     tui: bool,
 
     /// Launch embedded local web dashboard in background while running REPL or TUI.
@@ -99,6 +100,8 @@ pub struct UserProfile {
     pub coding_style: String,
     #[serde(default = "default_true")]
     pub show_token_usage: bool,
+    #[serde(default)]
+    pub default_ui: Option<String>,
 }
 
 impl Default for UserProfile {
@@ -114,6 +117,7 @@ impl Default for UserProfile {
             response_language: "Bahasa Indonesia".to_string(),
             coding_style: "Tulis kode yang bersih (clean code), modern, idiomatik, efisien, dan minim dependensi tidak perlu. Berikan penjelasan ringkas dan solutif.".to_string(),
             show_token_usage: true,
+            default_ui: None,
         }
     }
 }
@@ -225,64 +229,91 @@ impl SupportedLanguage {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Skill {
-    pub id: &'static str,
-    pub name: &'static str,
-    pub description: &'static str,
-    pub system_prompt: &'static str,
+    pub id: Cow<'static, str>,
+    pub name: Cow<'static, str>,
+    pub description: Cow<'static, str>,
+    pub system_prompt: Cow<'static, str>,
+}
+
+impl Skill {
+    pub const fn new(
+        id: &'static str,
+        name: &'static str,
+        description: &'static str,
+        system_prompt: &'static str,
+    ) -> Self {
+        Self {
+            id: Cow::Borrowed(id),
+            name: Cow::Borrowed(name),
+            description: Cow::Borrowed(description),
+            system_prompt: Cow::Borrowed(system_prompt),
+        }
+    }
+}
+
+impl From<crate::tools::skills::SkillMetadata> for Skill {
+    fn from(meta: crate::tools::skills::SkillMetadata) -> Self {
+        Self {
+            id: Cow::Owned(meta.name.clone()),
+            name: Cow::Owned(meta.name),
+            description: Cow::Owned(meta.description),
+            system_prompt: Cow::Owned(meta.prompt_template),
+        }
+    }
 }
 
 pub fn get_available_skills() -> Vec<Skill> {
     vec![
-        Skill {
-            id: "rust-expert",
-            name: "🦀 Rust Expert",
-            description: "Spesialis Rust idiomatik, borrow checker, & performa tinggi",
-            system_prompt: "You are an elite Rust systems programming expert. Write idiomatic, memory-safe, and high-performance Rust code. Master the borrow checker, use zero-cost abstractions, prefer Result/Option error handling, and explain safety invariants clearly.",
-        },
-        Skill {
-            id: "code-reviewer",
-            name: "🔍 Code Reviewer",
-            description: "Audit kode menyeluruh untuk bug, celah keamanan, & code smells",
-            system_prompt: "You are a senior principal engineer and code reviewer. Rigorously review code for logical bugs, potential memory leaks, security vulnerabilities, edge cases, and maintainability issues. Provide constructive feedback with corrected, refactored code.",
-        },
-        Skill {
-            id: "web-frontend",
-            name: "🎨 Web Frontend UI/UX",
-            description: "Desain antarmuka modern, HTML/CSS/Tailwind responsif & estetik",
-            system_prompt: "You are a modern frontend architect and UI/UX designer. Create visually aesthetic, accessible, modern, and responsive user interfaces using modern HTML, CSS, Tailwind, or component frameworks with clean layouts.",
-        },
-        Skill {
-            id: "api-architect",
-            name: "🏗️ API & Backend Architect",
-            description: "Desain REST/GraphQL API, skema database, dan autentikasi",
-            system_prompt: "You are an enterprise backend and API architect. Design clean, scalable, RESTful or GraphQL APIs with robust validation, secure authentication (JWT/OAuth), clear error response schemas, and efficient database modeling.",
-        },
-        Skill {
-            id: "security-auditor",
-            name: "🛡️ Security Auditor",
-            description: "Audit keamanan aplikasi (OWASP Top 10, sanitasi input, mitigasi exploit)",
-            system_prompt: "You are an application security specialist. Identify security vulnerabilities adhering to OWASP Top 10 guidelines (e.g. injection, broken auth, XSS, SSRF). Explain attack vectors and provide hardened, secure code patches.",
-        },
-        Skill {
-            id: "debugger",
-            name: "🐞 Debugger & Trace Doctor",
-            description: "Analisis error, stack trace, dan pemecahan masalah sistematis",
-            system_prompt: "You are a master software debugger. Analyze stack traces, runtime errors, and unexpected behavior systematically. Perform root-cause analysis, explain why the bug happens, and provide the exact minimal fix.",
-        },
-        Skill {
-            id: "test-engineer",
-            name: "🧪 Test Engineer & TDD",
-            description: "Pembuatan unit test, integration test, mock, dan edge cases",
-            system_prompt: "You are a test-driven development (TDD) engineer. Write comprehensive unit and integration test suites covering edge cases, boundary conditions, error paths, and mocks to ensure 100% reliability.",
-        },
-        Skill {
-            id: "refactor",
-            name: "🧹 Clean Code & Refactoring",
-            description: "Pembersihan kode, prinsip SOLID/DRY, dan arsitektur modular",
-            system_prompt: "You are a software craftsperson focused on clean code, SOLID principles, and DRY architecture. Refactor tangled or bloated code into elegant, modular, and readable components without breaking functionality.",
-        },
+        Skill::new(
+            "rust-expert",
+            "🦀 Rust Expert",
+            "Spesialis Rust idiomatik, borrow checker, & performa tinggi",
+            "You are an elite Rust systems programming expert. Write idiomatic, memory-safe, and high-performance Rust code. Master the borrow checker, use zero-cost abstractions, prefer Result/Option error handling, and explain safety invariants clearly.",
+        ),
+        Skill::new(
+            "code-reviewer",
+            "🔍 Code Reviewer",
+            "Audit kode menyeluruh untuk bug, celah keamanan, & code smells",
+            "You are a senior principal engineer and code reviewer. Rigorously review code for logical bugs, potential memory leaks, security vulnerabilities, edge cases, and maintainability issues. Provide constructive feedback with corrected, refactored code.",
+        ),
+        Skill::new(
+            "web-frontend",
+            "🎨 Web Frontend UI/UX",
+            "Desain antarmuka modern, HTML/CSS/Tailwind responsif & estetik",
+            "You are a modern frontend architect and UI/UX designer. Create visually aesthetic, accessible, modern, and responsive user interfaces using modern HTML, CSS, Tailwind, or component frameworks with clean layouts.",
+        ),
+        Skill::new(
+            "api-architect",
+            "🏗️ API & Backend Architect",
+            "Desain REST/GraphQL API, skema database, dan autentikasi",
+            "You are an enterprise backend and API architect. Design clean, scalable, RESTful or GraphQL APIs with robust validation, secure authentication (JWT/OAuth), clear error response schemas, and efficient database modeling.",
+        ),
+        Skill::new(
+            "security-auditor",
+            "🛡️ Security Auditor",
+            "Audit keamanan aplikasi (OWASP Top 10, sanitasi input, mitigasi exploit)",
+            "You are an application security specialist. Identify security vulnerabilities adhering to OWASP Top 10 guidelines (e.g. injection, broken auth, XSS, SSRF). Explain attack vectors and provide hardened, secure code patches.",
+        ),
+        Skill::new(
+            "debugger",
+            "🐞 Debugger & Trace Doctor",
+            "Analisis error, stack trace, dan pemecahan masalah sistematis",
+            "You are a master software debugger. Analyze stack traces, runtime errors, and unexpected behavior systematically. Perform root-cause analysis, explain why the bug happens, and provide the exact minimal fix.",
+        ),
+        Skill::new(
+            "test-engineer",
+            "🧪 Test Engineer & TDD",
+            "Pembuatan unit test, integration test, mock, dan edge cases",
+            "You are a test-driven development (TDD) engineer. Write comprehensive unit and integration test suites covering edge cases, boundary conditions, error paths, and mocks to ensure 100% reliability.",
+        ),
+        Skill::new(
+            "refactor",
+            "🧹 Clean Code & Refactoring",
+            "Pembersihan kode, prinsip SOLID/DRY, dan arsitektur modular",
+            "You are a software craftsperson focused on clean code, SOLID principles, and DRY architecture. Refactor tangled or bloated code into elegant, modular, and readable components without breaking functionality.",
+        ),
     ]
 }
 
@@ -659,7 +690,7 @@ Identity and context:
 - If a tool or command fails, diagnose the error before retrying.
 - Keep answers practical and concise. Do not narrate routine steps unnecessarily.";
 
-    let skill_part = active_skill.map(|s| s.system_prompt).unwrap_or("");
+    let skill_part = active_skill.map(|s| s.system_prompt.as_ref()).unwrap_or("");
 
     let profile_part = format!(
         "\n\n[User Profile: {}]\n- Preferred Tech Stack: {}\n- Response Language: {}\n- Coding Style Guidelines: {}",
@@ -705,8 +736,13 @@ pub const COMMAND_SPECS: &[CommandSpec] = &[
     },
     CommandSpec {
         primary: "/skill",
-        aliases: &["/skills"],
+        aliases: &[],
         description: "Pilih peran spesialis AI (Rust Expert, Reviewer, Web UI)",
+    },
+    CommandSpec {
+        primary: "/skills",
+        aliases: &["/skill-list"],
+        description: "Daftar dan info skill / persona agen (dynamic discovery)",
     },
     CommandSpec {
         primary: "/lang",
@@ -900,6 +936,11 @@ pub fn resolve_slash_command(input: &str) -> (String, Option<String>) {
         }
     }
 
+    // If both /skill and /skills match, prefer the base command /skill for sub-prefixes
+    if matching_primaries.contains(&"/skill") && matching_primaries.contains(&"/skills") {
+        matching_primaries.retain(|&p| p != "/skills");
+    }
+
     if matching_primaries.len() == 1 {
         let expanded = matching_primaries[0];
         let note = format!("⚡ Auto-corrected '{}' -> '{}'", cmd, expanded);
@@ -956,8 +997,18 @@ impl Autocomplete for SlashCompleter {
                 }
             }
         } else if let Some(prefix) = input.strip_prefix("/skill ") {
-            let mut skill_ids: Vec<&str> = get_available_skills().iter().map(|s| s.id).collect();
-            skill_ids.push("reset");
+            let mut skill_ids: Vec<String> = get_available_skills()
+                .into_iter()
+                .map(|s| s.id.into_owned())
+                .collect();
+            let root = crate::tools::filesystem::get_workspace_root();
+            let discovered = crate::tools::skills::discover_skills(&root);
+            for s in discovered {
+                if !skill_ids.iter().any(|id| id.eq_ignore_ascii_case(&s.name)) {
+                    skill_ids.push(s.name);
+                }
+            }
+            skill_ids.push("reset".to_string());
             for id in skill_ids {
                 if id.to_lowercase().starts_with(&prefix.to_lowercase()) {
                     suggestions.push(format!("/skill {}", id));
@@ -1014,9 +1065,32 @@ impl Autocomplete for SlashCompleter {
                     suggestions.push(format!("/metrics {}", s));
                 }
             }
+        } else if let Some(prefix) = input.strip_prefix("/skills info ") {
+            let root = crate::tools::filesystem::get_workspace_root();
+            let discovered = crate::tools::skills::discover_skills(&root);
+            for s in discovered {
+                if s.name.to_lowercase().starts_with(&prefix.to_lowercase()) {
+                    suggestions.push(format!("/skills info {}", s.name));
+                }
+            }
+        } else if let Some(prefix) = input.strip_prefix("/skills ") {
+            let subs = ["list", "info"];
+            for s in subs {
+                if s.starts_with(&prefix.to_lowercase()) {
+                    suggestions.push(format!("/skills {}", s));
+                }
+            }
         } else if input.starts_with('/') {
             let lower_input = input.to_lowercase();
             let subcommands = [
+                (
+                    "/skills list",
+                    "Tampilkan daftar semua skill yang ditemukan di workspace",
+                ),
+                (
+                    "/skills info",
+                    "Tampilkan detail dan prompt template skill tertentu",
+                ),
                 (
                     "/provider list",
                     "Tampilkan tabel semua provider terkonfigurasi",
@@ -1075,7 +1149,7 @@ impl Autocomplete for SlashCompleter {
             } else if let Some((cmd, _)) = h.split_once(" - ") {
                 cmd.trim().to_string()
             } else {
-                h.split_whitespace().next().unwrap_or(&h).to_string()
+                h.trim().to_string()
             };
             return Ok(Replacement::Some(clean));
         }
@@ -1089,7 +1163,7 @@ impl Autocomplete for SlashCompleter {
                     } else if let Some((cmd, _)) = s.split_once(" - ") {
                         cmd.trim().to_string()
                     } else {
-                        s.split_whitespace().next().unwrap_or(s).to_string()
+                        s.trim().to_string()
                     }
                 })
                 .collect();
@@ -1153,9 +1227,15 @@ fn main() -> Result<()> {
         }) => {
             let full_prompt = prompt.join(" ");
             let skill_obj = skill.and_then(|s_name| {
-                get_available_skills()
+                if let Some(found) = get_available_skills()
                     .into_iter()
                     .find(|s| s.id.eq_ignore_ascii_case(&s_name))
+                {
+                    Some(found)
+                } else {
+                    let root = crate::tools::filesystem::get_workspace_root();
+                    crate::tools::skills::get_skill_by_name(&s_name, &root).map(Skill::from)
+                }
             });
             handle_generate(
                 &full_prompt,
@@ -1168,7 +1248,14 @@ fn main() -> Result<()> {
             )?;
         }
         Some(Commands::Tui) => {
-            tui::run_tui(&mut profile, &mut providers_reg)?;
+            if let Err(e) = tui::run_tui(&mut profile, &mut providers_reg) {
+                eprintln!("\n❌ Tidak dapat memulai mode TUI: {}", e);
+                if cfg!(windows) {
+                    eprintln!("💡 Tips Windows: Pastikan Anda menggunakan terminal standar (PowerShell, Windows Terminal, atau CMD).");
+                    eprintln!("   Jika menggunakan Git Bash (mintty), jalankan dengan 'winpty ctrl-cli.exe tui' atau gunakan PowerShell.\n");
+                }
+                return Err(e);
+            }
             if tui::app::take_return_to_repl() {
                 start_repl(&mut profile, &mut providers_reg)?;
             }
@@ -1183,11 +1270,34 @@ fn main() -> Result<()> {
                 .map(|name| name.ends_with("-tui") || name.ends_with("_tui"))
                 .unwrap_or(false);
 
+            let env_wants_tui = std::env::var("CTRL_TUI")
+                .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+                .unwrap_or(false)
+                || std::env::var("CTRL_MODE")
+                    .map(|v| v.eq_ignore_ascii_case("tui"))
+                    .unwrap_or(false)
+                || std::env::var("CTRL_UI")
+                    .map(|v| v.eq_ignore_ascii_case("tui"))
+                    .unwrap_or(false);
+
+            let profile_wants_tui = profile
+                .default_ui
+                .as_deref()
+                .map(|s| s.eq_ignore_ascii_case("tui"))
+                .unwrap_or(false);
+
             if cli.cli {
                 start_repl(&mut profile, &mut providers_reg)?;
-            } else if cli.tui || exe_is_tui {
-                tui::run_tui(&mut profile, &mut providers_reg)?;
-                if tui::app::take_return_to_repl() {
+            } else if cli.tui || exe_is_tui || env_wants_tui || profile_wants_tui {
+                if let Err(e) = tui::run_tui(&mut profile, &mut providers_reg) {
+                    eprintln!("\n❌ Tidak dapat memulai mode TUI: {}", e);
+                    if cfg!(windows) {
+                        eprintln!("💡 Tips Windows: Pastikan Anda menggunakan terminal standar (PowerShell, Windows Terminal, atau CMD).");
+                        eprintln!("   Jika menggunakan Git Bash (mintty), jalankan dengan 'winpty' atau beralih ke PowerShell.\n");
+                    }
+                    eprintln!("Beralih ke mode CLI / REPL biasa...\n");
+                    start_repl(&mut profile, &mut providers_reg)?;
+                } else if tui::app::take_return_to_repl() {
                     start_repl(&mut profile, &mut providers_reg)?;
                 }
             } else {
@@ -1273,12 +1383,14 @@ fn handle_generate(
             Ok(summary) => println!("✔ File berhasil dibuat: {}", summary),
             Err(e) => {
                 eprintln!("Gagal menulis file {}: {}", dest, e);
-                println!("{}", result.final_content);
+                let highlighted = crate::tui::highlight_markdown_code_blocks_ansi(&result.final_content);
+                println!("{}", highlighted);
             }
         }
     } else {
         if !stream_output {
-            println!("{}", result.final_content);
+            let highlighted = crate::tui::highlight_markdown_code_blocks_ansi(&result.final_content);
+            println!("{}", highlighted);
         }
         if let Some(note) =
             auto_save_if_code_generated(prompt, &result.final_content, result.tools_executed)
@@ -1700,6 +1812,11 @@ fn handle_slash_command(
                     "Delegasikan task cabang ke autonomous subagent terisolasi",
                 ),
                 (
+                    "knowledge_search",
+                    "Safe (Auto)",
+                    "Pencarian BM25 in-process dokumen data/knowledge/*.md",
+                ),
+                (
                     "mcp__*",
                     "MCP Bridge",
                     "Tools eksternal dinamis dari server .ctrl/mcp.json",
@@ -1712,9 +1829,39 @@ fn handle_slash_command(
             true
         }
         "/undo" => {
-            match crate::agent::checkpoint::CheckpointManager::undo_last() {
-                Ok(msg) => println!("\n{}\n", msg),
-                Err(e) => println!("\n❌ Undo error: {}\n", e),
+            if parts.len() > 1 && parts[1].eq_ignore_ascii_case("list") {
+                let manifests = crate::agent::checkpoint::CheckpointManager::list_multi_checkpoints()
+                    .unwrap_or_default();
+                let records = crate::agent::checkpoint::CheckpointManager::list_checkpoints();
+
+                if manifests.is_empty() && records.is_empty() {
+                    println!("\nBelum ada snapshot checkpoint yang tersimpan.\n");
+                } else {
+                    println!("\n╭─────────────────────────────────────────────────────────────╮");
+                    println!("│ 🕒 Checkpoint History (/undo list)                          │");
+                    println!("├─────────────────────────────────────────────────────────────┤");
+                    for m in &manifests {
+                        println!(
+                            "│ • [{}] {:<18} -> {} file(s) [{}]",
+                            m.timestamp,
+                            m.id,
+                            m.files.len(),
+                            m.files.join(", ")
+                        );
+                    }
+                    for r in records.iter().rev().take(10) {
+                        println!(
+                            "│ • #{:<3} [{}] {:<8} -> {:<26}│",
+                            r.id, r.timestamp, r.action, r.file_path
+                        );
+                    }
+                    println!("╰─────────────────────────────────────────────────────────────╯\n");
+                }
+            } else {
+                match crate::agent::checkpoint::CheckpointManager::undo_last() {
+                    Ok(msg) => println!("\n{}\n", msg),
+                    Err(e) => println!("\n❌ Undo error: {}\n", e),
+                }
             }
             true
         }
@@ -1974,7 +2121,88 @@ fn handle_slash_command(
             conversation,
             streaming,
         ),
-        "/skill" | "/skills" => {
+        "/skills" | "/skill-list" => {
+            let sub = parts.get(1).map(|s| s.to_lowercase());
+            match sub.as_deref() {
+                Some("list") => {
+                    let root = crate::tools::filesystem::get_workspace_root();
+                    let discovered = crate::tools::skills::discover_skills(&root);
+                    if discovered.is_empty() {
+                        println!("\nTidak ada skill yang ditemukan di workspace (skills/, .ctrl/skills/, prompts/).\n");
+                    } else {
+                        println!("\n╭─────────────────────────────────────────────────────────────────────────────╮");
+                        println!("│ 🧠 Discovered Agent Skills ({:<2} found)                                      │", discovered.len());
+                        println!("├───────────────────────┬─────────────────────────────────────────────────────┤");
+                        println!("│ {:<21} │ {:<51} │", "Skill Name", "Description");
+                        println!("├───────────────────────┼─────────────────────────────────────────────────────┤");
+                        for s in &discovered {
+                            let desc = if s.description.chars().count() > 51 {
+                                format!("{}...", s.description.chars().take(48).collect::<String>())
+                            } else {
+                                s.description.clone()
+                            };
+                            println!("│ {:<21} │ {:<51} │", s.name, desc);
+                        }
+                        println!("╰───────────────────────┴─────────────────────────────────────────────────────╯");
+                        println!("Ketik `/skills info <name>` untuk melihat detail dan instruksi lengkap.\n");
+                    }
+                }
+                Some("info") => {
+                    if let Some(name) = parts.get(2) {
+                        let root = crate::tools::filesystem::get_workspace_root();
+                        if let Some(skill) = crate::tools::skills::get_skill_by_name(name, &root) {
+                            println!("\n╭─────────────────────────────────────────────────────────────────────────────╮");
+                            println!("│ ℹ️  Skill Details: {:<56}│", skill.name);
+                            println!("├─────────────────────────────────────────────────────────────────────────────┤");
+                            println!("│  • Name        : {:<58}│", skill.name);
+                            println!("│  • Path        : {:<58}│", skill.path.display());
+                            let tools_str = if skill.tools.is_empty() {
+                                "All default tools allowed".to_string()
+                            } else {
+                                skill.tools.join(", ")
+                            };
+                            println!("│  • Tools       : {:<58}│", tools_str);
+                            println!("│  • Description : {:<58}│", skill.description);
+                            println!("├─────────────────────────────────────────────────────────────────────────────┤");
+                            println!("│ 📝 Prompt Template / Instructions Snippet:                                  │");
+                            println!("├─────────────────────────────────────────────────────────────────────────────┤");
+                            for (i, line) in skill.prompt_template.lines().take(20).enumerate() {
+                                println!("│ {:>2}: {:<71}│", i + 1, line.chars().take(71).collect::<String>());
+                            }
+                            if skill.prompt_template.lines().count() > 20 {
+                                println!("│ ... ({} lines total)                                                        │", skill.prompt_template.lines().count());
+                            }
+                            println!("╰─────────────────────────────────────────────────────────────────────────────╯\n");
+                        } else {
+                            println!("\n❌ Skill '{}' tidak ditemukan di workspace.", name);
+                            println!("   Gunakan `/skills list` untuk melihat semua skill yang tersedia.\n");
+                        }
+                    } else {
+                        println!("\nPenggunaan: `/skills info <name>`");
+                        println!("Contoh: `/skills info researcher`\n");
+                    }
+                }
+                _ => {
+                    println!("\n╭─────────────────────────────────────────────────────────────────────────────╮");
+                    println!("│ 🧭 Skills Command Usage                                                     │");
+                    println!("├─────────────────────────────────────────────────────────────────────────────┤");
+                    println!("│  • /skills list         - Tampilkan semua skill yang ditemukan di workspace │");
+                    println!("│  • /skills info <name>  - Tampilkan detail & prompt template suatu skill    │");
+                    println!("╰─────────────────────────────────────────────────────────────────────────────╯");
+                    let root = crate::tools::filesystem::get_workspace_root();
+                    let discovered = crate::tools::skills::discover_skills(&root);
+                    if !discovered.is_empty() {
+                        println!("\nDiscovered Skills ({}) :", discovered.len());
+                        for s in &discovered {
+                            println!("  • {:<16} - {}", s.name, s.description);
+                        }
+                        println!("\nKetik `/skills info <name>` untuk detail atau `/skill` untuk memilih persona.\n");
+                    }
+                }
+            }
+            true
+        }
+        "/skill" => {
             if parts.len() > 1 && cmd == "/skill" {
                 let target = parts[1].to_lowercase();
                 if target == "reset" || target == "none" || target == "default" {
@@ -1986,10 +2214,16 @@ fn handle_slash_command(
                     println!("\n✔ Skill aktif: {} ({})\n", found.name, found.id);
                     *active_skill = Some(found);
                 } else {
-                    println!(
-                        "\nSkill '{}' tidak ditemukan. Ketik `/skill` untuk memilih dari daftar.\n",
-                        parts[1]
-                    );
+                    let root = crate::tools::filesystem::get_workspace_root();
+                    if let Some(dyn_skill) = crate::tools::skills::get_skill_by_name(&target, &root) {
+                        println!("\n✔ Dynamic Skill aktif: {} ({})\n", dyn_skill.name, dyn_skill.path.display());
+                        *active_skill = Some(Skill::from(dyn_skill));
+                    } else {
+                        println!(
+                            "\nSkill '{}' tidak ditemukan. Ketik `/skills list` untuk melihat daftar.\n",
+                            parts[1]
+                        );
+                    }
                 }
             } else {
                 let mut options: Vec<String> = get_available_skills()
@@ -2082,6 +2316,14 @@ fn handle_slash_command(
                     "Nonaktif"
                 }
             );
+            println!(
+                "│  • Mode Default   : {:<40}│",
+                user_profile
+                    .default_ui
+                    .as_deref()
+                    .map(|s| if s.eq_ignore_ascii_case("tui") { "TUI (Modern Terminal UI)" } else { "CLI / REPL (Classic)" })
+                    .unwrap_or("CLI / REPL (Auto)")
+            );
             println!("├─────────────────────────────────────────────────────────────┤");
             println!("│  • Coding Style Guidelines:                                 │");
             for line in textwrap_simple(&user_profile.coding_style, 54) {
@@ -2091,6 +2333,7 @@ fn handle_slash_command(
 
             let edit_opts = vec![
                 "🌐 Ganti Bahasa Respon (English / Indonesia / 中文)",
+                "🖥️  Pilih Mode Default (TUI vs CLI/REPL)",
                 "👤 Ubah Nama & Coding Style",
                 "⬅️  Kembali",
             ];
@@ -2107,6 +2350,22 @@ fn handle_slash_command(
                         conversation,
                         streaming,
                     );
+                } else if choice.contains("Pilih Mode Default") {
+                    let ui_opts = vec![
+                        "🖥️  TUI (Modern Terminal UI - Otomatis terbuka saat menjalankan ctrl-cli)",
+                        "⌨️  CLI / REPL (Classic line-based prompt)",
+                    ];
+                    if let Ok(ui_choice) = Select::new("Pilih antarmuka default:", ui_opts).prompt() {
+                        if ui_choice.contains("TUI") {
+                            user_profile.default_ui = Some("tui".to_string());
+                            println!("✔ Antarmuka default diatur ke TUI!");
+                        } else {
+                            user_profile.default_ui = Some("cli".to_string());
+                            println!("✔ Antarmuka default diatur ke CLI / REPL!");
+                        }
+                        save_user_profile(user_profile);
+                        println!("✔ Profil berhasil disimpan!\n");
+                    }
                 } else if choice.contains("Ubah Nama") {
                     if let Ok(new_name) = Text::new("Nama panggilan:")
                         .with_default(&user_profile.name)
@@ -2163,7 +2422,7 @@ fn handle_slash_command(
                 "  \x1B[90mActive Skill   :\x1B[0m \x1B[35m{}\x1B[0m",
                 active_skill
                     .as_ref()
-                    .map(|s| s.name)
+                    .map(|s| s.name.as_ref())
                     .unwrap_or("General Assistant")
             );
             println!(
@@ -2826,6 +3085,15 @@ fn print_task_completion_notifications(tm: &crate::agent::tasks::TaskManager, is
         return;
     }
 
+    let alert_enabled = std::env::var("ALERT_ON_TASK_DONE")
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        .unwrap_or(is_term);
+    let bell = crate::agent::tasks::emit_task_completion_alert(alert_enabled);
+    if !bell.is_empty() {
+        print!("{}", bell);
+        let _ = std::io::stdout().flush();
+    }
+
     println!();
     for snap in &unnotified {
         println!("{}", snap.format_notification(is_term));
@@ -2871,7 +3139,7 @@ fn start_repl(user_profile: &mut UserProfile, providers_reg: &mut ProvidersRegis
         println!("  \x1B[35m●\x1B[0m \x1B[90mMemori Sesi:\x1B[0m \x1B[37m{} pesan dipulihkan dari .ctrl/session.json\x1B[0m", conversation.len());
     }
     println!("  \x1B[90m─────────────────────────────────────────────────────────────────\x1B[0m");
-    println!("  \x1B[90m💡 Ketik instruksi dan Enter. Ketik \x1B[36m'/'\x1B[90m untuk menu atau \x1B[36m'?'\x1B[90m untuk bantuan.\x1B[0m\n");
+    println!("  \x1B[90m💡 Ketik instruksi dan Enter. Ketik \x1B[36m'tui'\x1B[90m untuk mode grafis, \x1B[36m'/'\x1B[90m untuk menu, \x1B[36m'?'\x1B[90m untuk bantuan.\x1B[0m\n");
 
     let is_term = std::io::stdin().is_terminal();
 
@@ -2928,6 +3196,28 @@ fn start_repl(user_profile: &mut UserProfile, providers_reg: &mut ProvidersRegis
             continue;
         }
 
+        // Direct shortcut to switch to TUI mode without needing slash prefix
+        if trimmed.eq_ignore_ascii_case("tui")
+            || trimmed.eq_ignore_ascii_case(":tui")
+            || trimmed.eq_ignore_ascii_case(":gui")
+        {
+            if !handle_slash_command(
+                "/tui",
+                &mut current_model,
+                &mut active_skill,
+                user_profile,
+                providers_reg,
+                &token_tracker,
+                &mut permission_gate,
+                &mut conversation,
+                &mut streaming,
+            ) {
+                println!("\nExiting REPL. Goodbye {}!", user_profile.name);
+                break;
+            }
+            continue;
+        }
+
         // Apply prefix auto-expansion & autocorrect (e.g. /comp -> /compact, ? -> /help)
         let (resolved_cmd, auto_note) = resolve_slash_command(trimmed);
         if let Some(note) = auto_note {
@@ -2977,7 +3267,8 @@ fn start_repl(user_profile: &mut UserProfile, providers_reg: &mut ProvidersRegis
                     &turn_res.final_content,
                 );
                 if !streaming {
-                    println!("\n{}\n", turn_res.final_content);
+                    let highlighted = crate::tui::highlight_markdown_code_blocks_ansi(&turn_res.final_content);
+                    println!("\n{}\n", highlighted);
                 }
 
                 // Auto-Writer Safety Net: If code was generated but model didn't call write_file
@@ -3034,6 +3325,34 @@ mod tests {
         let spec = stats_spec.unwrap();
         assert!(spec.aliases.contains(&"/metrics"));
         assert!(spec.description.contains("resource real-time"));
+    }
+
+    #[test]
+    fn test_command_specs_contains_skills() {
+        let skills_spec = COMMAND_SPECS.iter().find(|s| s.primary == "/skills");
+        assert!(skills_spec.is_some(), "/skills must be present in COMMAND_SPECS");
+        let spec = skills_spec.unwrap();
+        assert!(spec.aliases.contains(&"/skill-list"));
+        assert!(spec.description.contains("skill") || spec.description.contains("persona"));
+    }
+
+    #[test]
+    fn test_resolve_slash_command_skills() {
+        let (exact, note) = resolve_slash_command("/skills");
+        assert_eq!(exact, "/skills");
+        assert!(note.is_none());
+
+        let (exact_list, note) = resolve_slash_command("/skills list");
+        assert_eq!(exact_list, "/skills list");
+        assert!(note.is_none());
+
+        let (exact_info, note) = resolve_slash_command("/skills info researcher");
+        assert_eq!(exact_info, "/skills info researcher");
+        assert!(note.is_none());
+
+        let (exact_alias, note) = resolve_slash_command("/skill-list");
+        assert_eq!(exact_alias, "/skill-list");
+        assert!(note.is_none());
     }
 
     #[test]
@@ -3213,4 +3532,80 @@ mod tests {
         set_return_to_repl(false);
         assert!(!take_return_to_repl());
     }
+
+    #[test]
+    fn test_slash_completer_includes_discovered_skills() {
+        use crate::SlashCompleter;
+        use inquire::autocompletion::{Autocomplete, Replacement};
+
+        let mut completer = SlashCompleter;
+
+        // /skill should include hardcoded skills + reset
+        let suggs = completer.get_suggestions("/skill ").unwrap();
+        assert!(suggs.iter().any(|s| s.contains("rust-expert")));
+        assert!(suggs.iter().any(|s| s.contains("reset")));
+
+        // Tab completion on /skill rus should complete to /skill rust-expert
+        let repl = completer.get_completion("/skill rus", None).unwrap();
+        match repl {
+            Replacement::Some(s) => assert_eq!(s, "/skill rust-expert"),
+            _ => panic!("Expected replacement for /skill rus"),
+        }
+    }
+
+    #[test]
+    fn test_dynamic_skill_conversion_without_leaks() {
+        use crate::tools::skills::SkillMetadata;
+        use crate::{build_system_prompt, Skill, UserProfile};
+        use std::path::PathBuf;
+
+        let meta = SkillMetadata {
+            name: "test-persona".to_string(),
+            description: "A test persona".to_string(),
+            tools: vec!["read_file".to_string()],
+            prompt_template: "Custom prompt template for testing".to_string(),
+            path: PathBuf::from("skills/test/SKILL.md"),
+        };
+
+        let skill = Skill::from(meta);
+        assert_eq!(skill.id, "test-persona");
+        assert_eq!(skill.name, "test-persona");
+        assert_eq!(skill.description, "A test persona");
+        assert_eq!(skill.system_prompt, "Custom prompt template for testing");
+
+        let profile = UserProfile::default();
+        let prompt = build_system_prompt(Some(&skill), &profile);
+        assert!(prompt.contains("Custom prompt template for testing"));
+        // Dropping skill cleanly frees heap strings without Box::leak
+    }
+
+    #[test]
+    fn test_cli_short_flag_tui() {
+        use clap::Parser;
+        let cli = Cli::parse_from(["ctrl-cli", "-t"]);
+        assert!(cli.tui, "-t flag must set cli.tui to true");
+        assert!(!cli.cli);
+
+        let cli_long = Cli::parse_from(["ctrl-cli", "--tui"]);
+        assert!(cli_long.tui, "--tui flag must set cli.tui to true");
+    }
+
+    #[test]
+    fn test_user_profile_default_ui_serde() {
+        let mut prof = UserProfile::default();
+        assert_eq!(prof.default_ui, None);
+
+        prof.default_ui = Some("tui".to_string());
+        let json = serde_json::to_string(&prof).expect("serialize");
+        assert!(json.contains("\"default_ui\":\"tui\""));
+
+        let deserialized: UserProfile = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(deserialized.default_ui, Some("tui".to_string()));
+
+        // Backward compatibility: JSON without default_ui should deserialize with None
+        let legacy_json = r#"{"name":"test","tech_stack":[],"response_language":"en","coding_style":"clean","show_token_usage":true}"#;
+        let legacy_prof: UserProfile = serde_json::from_str(legacy_json).expect("legacy deserialize");
+        assert_eq!(legacy_prof.default_ui, None);
+    }
 }
+

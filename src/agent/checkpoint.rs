@@ -3,6 +3,13 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
 
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+pub struct CheckpointManifest {
+    pub id: String,
+    pub timestamp: String,
+    pub files: Vec<String>,
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct CheckpointRecord {
     pub id: usize,
@@ -129,8 +136,128 @@ impl CheckpointManager {
         Ok(id)
     }
 
-    /// Reverts the most recent checkpoint.
+    pub fn get_checkpoints_dir() -> PathBuf {
+        let current = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+        current.join(".ctrl").join("checkpoints")
+    }
+
+    /// Creates an atomic multi-file checkpoint snapshotting given relative files into `.ctrl/checkpoints/<cp-id>/`.
+    pub fn create_multi_checkpoint(ws_root: &Path, files: &[&str]) -> Result<String> {
+        let cp_dir = Self::get_checkpoints_dir();
+        fs::create_dir_all(&cp_dir)?;
+
+        let cp_id = format!(
+            "cp-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis()
+        );
+        let target_cp_dir = cp_dir.join(&cp_id);
+        fs::create_dir_all(&target_cp_dir)?;
+
+        let mut manifest_files = Vec::new();
+        for rel_file in files {
+            let src = ws_root.join(rel_file);
+            if src.exists() {
+                let dest = target_cp_dir.join(rel_file);
+                if let Some(parent) = dest.parent() {
+                    fs::create_dir_all(parent)?;
+                }
+                fs::copy(&src, &dest)?;
+                manifest_files.push(rel_file.to_string());
+            }
+        }
+
+        let now = chrono_or_fallback_timestamp();
+        let manifest = CheckpointManifest {
+            id: cp_id.clone(),
+            timestamp: now,
+            files: manifest_files,
+        };
+        let manifest_json = serde_json::to_string_pretty(&manifest)?;
+        fs::write(target_cp_dir.join("manifest.json"), manifest_json)?;
+
+        Ok(cp_id)
+    }
+
+    /// Reverts an atomic multi-file checkpoint. If `cp_id` is None, reverts the most recent one.
+    pub fn rollback_multi_checkpoint(ws_root: &Path, cp_id: Option<&str>) -> Result<Vec<String>> {
+        let cp_dir = Self::get_checkpoints_dir();
+        let target_id = if let Some(id) = cp_id {
+            id.to_string()
+        } else {
+            let mut list = Self::list_multi_checkpoints()?;
+            if list.is_empty() {
+                anyhow::bail!("No multi-file checkpoints available to undo.");
+            }
+            list.remove(0).id
+        };
+
+        let target_dir = cp_dir.join(&target_id);
+        let manifest_path = target_dir.join("manifest.json");
+        if !manifest_path.exists() {
+            anyhow::bail!("Checkpoint manifest not found for id: {}", target_id);
+        }
+
+        let manifest_str = fs::read_to_string(&manifest_path)?;
+        let manifest: CheckpointManifest = serde_json::from_str(&manifest_str)?;
+
+        let mut restored = Vec::new();
+        for rel_file in &manifest.files {
+            let backup_file = target_dir.join(rel_file);
+            let original_file = ws_root.join(rel_file);
+            if backup_file.exists() {
+                if let Some(parent) = original_file.parent() {
+                    fs::create_dir_all(parent)?;
+                }
+                fs::copy(&backup_file, &original_file)?;
+                restored.push(rel_file.clone());
+            }
+        }
+
+        let _ = fs::remove_dir_all(&target_dir);
+
+        Ok(restored)
+    }
+
+    /// Lists all multi-file checkpoints sorted newest first.
+    pub fn list_multi_checkpoints() -> Result<Vec<CheckpointManifest>> {
+        let cp_dir = Self::get_checkpoints_dir();
+        let mut list = Vec::new();
+        if !cp_dir.exists() {
+            return Ok(list);
+        }
+        for entry in fs::read_dir(&cp_dir)?.flatten() {
+            let p = entry.path();
+            if p.is_dir() {
+                let m_path = p.join("manifest.json");
+                if m_path.exists() {
+                    if let Ok(content) = fs::read_to_string(&m_path) {
+                        if let Ok(manifest) = serde_json::from_str::<CheckpointManifest>(&content) {
+                            list.push(manifest);
+                        }
+                    }
+                }
+            }
+        }
+        list.sort_by(|a, b| b.id.cmp(&a.id));
+        Ok(list)
+    }
+
+    /// Reverts the most recent checkpoint (prioritizing multi-file checkpoints if present, then single-file snapshot).
     pub fn undo_last() -> Result<String> {
+        let ws = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+        if let Ok(restored) = Self::rollback_multi_checkpoint(&ws, None) {
+            if !restored.is_empty() {
+                return Ok(format!(
+                    "✔ Undid multi-file checkpoint. Restored {} file(s): {}",
+                    restored.len(),
+                    restored.join(", ")
+                ));
+            }
+        }
+
         let mut index = Self::load_index();
         let record = match index.records.pop() {
             Some(r) => r,

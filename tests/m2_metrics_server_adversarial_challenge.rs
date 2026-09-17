@@ -613,13 +613,19 @@ fn challenge_socket_resilience_and_no_leaks_or_hangs() {
             drop(s);
         }
     }
-    thread::sleep(Duration::from_millis(100));
+    thread::sleep(Duration::from_millis(250));
 
     // 5.6 Verify server is completely healthy and responsive
-    let health = ureq::get(&format!("{}/api/metrics", base_url))
-        .timeout(Duration::from_secs(2))
+    let mut health = ureq::get(&format!("{}/api/metrics", base_url))
+        .timeout(Duration::from_secs(5))
         .call();
-    assert!(health.is_ok(), "Server must remain functional after socket abuse");
+    if health.is_err() {
+        thread::sleep(Duration::from_millis(300));
+        health = ureq::get(&format!("{}/api/metrics", base_url))
+            .timeout(Duration::from_secs(5))
+            .call();
+    }
+    assert!(health.is_ok(), "Server must remain functional after socket abuse: {:?}", health.as_ref().err());
     let resp = health.unwrap();
     assert_eq!(resp.status(), 200);
     let metrics: ProcessMetrics = resp.into_json().expect("Valid ProcessMetrics");

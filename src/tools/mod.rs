@@ -1,5 +1,9 @@
+pub mod audit;
 pub mod filesystem;
+pub mod git;
+pub mod guardrails;
 pub mod interaction;
+pub mod knowledge;
 pub mod mcp;
 pub mod result_store;
 pub mod search;
@@ -10,12 +14,70 @@ pub mod skills;
 mod tests;
 pub mod web;
 
+pub use audit::{log_tool_invocation, with_audit_dir, AuditLogger, AuditRecord};
+pub use git::{tool_git_commit, tool_git_diff, tool_git_status, GitCommitResult, GitStatusResult};
+pub use guardrails::{check_destructive_guardrail, is_destructive_command};
+
+#[derive(Clone, Debug)]
+pub struct ToolExecutionContext {
+    pub session_id: String,
+    pub task_id: Option<String>,
+    pub is_background: bool,
+}
+
+thread_local! {
+    static CURRENT_TOOL_CONTEXT: std::cell::RefCell<Option<ToolExecutionContext>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Runs a closure with a scoped thread-local tool execution context.
+pub fn with_tool_context<F, R>(ctx: ToolExecutionContext, f: F) -> R
+where
+    F: FnOnce() -> R,
+{
+    struct ToolContextGuard(Option<ToolExecutionContext>);
+    impl Drop for ToolContextGuard {
+        fn drop(&mut self) {
+            CURRENT_TOOL_CONTEXT.with(|c| *c.borrow_mut() = self.0.take());
+        }
+    }
+
+    let prev = CURRENT_TOOL_CONTEXT.with(|c| c.borrow_mut().replace(ctx));
+    let _guard = ToolContextGuard(prev);
+    f()
+}
+
+/// Retrieves the current ambient tool execution context or creates a default one.
+pub fn get_tool_context() -> ToolExecutionContext {
+    CURRENT_TOOL_CONTEXT.with(|c| {
+        c.borrow().clone().unwrap_or_else(|| {
+            let is_bg = std::thread::current().name().is_some_and(|name| {
+                name.contains("task-worker")
+                    || name.contains("subagent")
+                    || name.contains("background")
+            });
+            let session_id = format!(
+                "sess-{:x}",
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_millis()
+            );
+            ToolExecutionContext {
+                session_id,
+                task_id: None,
+                is_background: is_bg,
+            }
+        })
+    })
+}
+
+
 use crate::types::{ChatCompletionTool, FunctionDefinition};
 use anyhow::{Context, Result};
 use serde_json::json;
 
 pub fn is_mutating_tool(name: &str) -> bool {
-    matches!(name, "write_file" | "edit_file" | "shell")
+    matches!(name, "write_file" | "edit_file" | "shell" | "git_commit")
 }
 
 pub fn get_available_tools() -> Vec<ChatCompletionTool> {
@@ -395,13 +457,154 @@ pub fn get_available_tools() -> Vec<ChatCompletionTool> {
                 }),
             },
         },
+        ChatCompletionTool {
+            tool_type: "function".to_string(),
+            function: FunctionDefinition {
+                name: "knowledge_search".to_string(),
+                description: "Search internal knowledge base documents in data/knowledge/ using pure Rust in-process BM25 ranking. Returns ranked excerpts with file paths, sections, and relevance scores.".to_string(),
+                parameters: json!({
+                    "type": "object",
+                    "properties": {
+                        "query": {
+                            "type": "string",
+                            "description": "Keywords or question to search within the knowledge base."
+                        },
+                        "top_k": {
+                            "type": "integer",
+                            "description": "Optional maximum number of relevant passages to return (default: 3, max: 10)."
+                        }
+                    },
+                    "required": ["query"]
+                }),
+            },
+        },
+        ChatCompletionTool {
+            tool_type: "function".to_string(),
+            function: FunctionDefinition {
+                name: "git_status".to_string(),
+                description: "Get structured status of the local Git repository, including current branch, staged files, unstaged modifications, and untracked files.".to_string(),
+                parameters: json!({
+                    "type": "object",
+                    "properties": {
+                        "repo_path": {
+                            "type": "string",
+                            "description": "Optional repository path (defaults to current workspace directory)."
+                        }
+                    }
+                }),
+            },
+        },
+        ChatCompletionTool {
+            tool_type: "function".to_string(),
+            function: FunctionDefinition {
+                name: "git_diff".to_string(),
+                description: "View git diff of modified files in the repository.".to_string(),
+                parameters: json!({
+                    "type": "object",
+                    "properties": {
+                        "repo_path": {
+                            "type": "string",
+                            "description": "Optional repository path (defaults to current workspace directory)."
+                        },
+                        "staged": {
+                            "type": "boolean",
+                            "description": "If true, view staged changes (--staged). Default: false."
+                        },
+                        "file": {
+                            "type": "string",
+                            "description": "Optional specific file path to diff."
+                        }
+                    }
+                }),
+            },
+        },
+        ChatCompletionTool {
+            tool_type: "function".to_string(),
+            function: FunctionDefinition {
+                name: "git_commit".to_string(),
+                description: "Commit staged modifications to the Git repository with a structured commit message.".to_string(),
+                parameters: json!({
+                    "type": "object",
+                    "properties": {
+                        "message": {
+                            "type": "string",
+                            "description": "The commit message."
+                        },
+                        "repo_path": {
+                            "type": "string",
+                            "description": "Optional repository path (defaults to current workspace directory)."
+                        },
+                        "all": {
+                            "type": "boolean",
+                            "description": "If true, automatically stage all modified and deleted files before committing (-a). Default: false."
+                        }
+                    },
+                    "required": ["message"]
+                }),
+            },
+        },
     ];
 
     tools.extend(mcp::McpManager::get_all_tools());
     tools
 }
 
+/// Dispatches a tool by name with arguments and records an audit log entry.
 pub fn dispatch_tool(name: &str, arguments_json: &str) -> Result<String> {
+    dispatch_tool_with_context(name, arguments_json, None)
+}
+
+/// Dispatches a tool with an explicit or ambient execution context and records an audit log entry.
+pub fn dispatch_tool_with_context(
+    name: &str,
+    arguments_json: &str,
+    context: Option<&ToolExecutionContext>,
+) -> Result<String> {
+    let start_time = std::time::Instant::now();
+    let timestamp = crate::agent::tasks::format_utc_timestamp(std::time::SystemTime::now());
+    let default_ctx = get_tool_context();
+    let ctx = context.unwrap_or(&default_ctx);
+
+    let args_val: serde_json::Value = serde_json::from_str(arguments_json)
+        .unwrap_or_else(|_| serde_json::json!({ "raw": arguments_json }));
+
+    let result = dispatch_tool_inner(name, arguments_json, ctx);
+
+    let duration_ms = start_time.elapsed().as_millis() as u64;
+    let status = match &result {
+        Ok(_) => "success",
+        Err(e) => {
+            let msg = e.to_string();
+            if msg.contains("Dry-run rejection")
+                || msg.contains("Operation cancelled by user")
+                || msg.contains("blocked")
+            {
+                "blocked"
+            } else {
+                "error"
+            }
+        }
+    };
+
+    let record = AuditRecord {
+        timestamp,
+        session_id: ctx.session_id.clone(),
+        task_id: ctx.task_id.clone(),
+        tool: name.to_string(),
+        parameters: args_val,
+        status: status.to_string(),
+        duration_ms,
+    };
+    let _ = log_tool_invocation(&record);
+
+    result
+}
+
+fn dispatch_tool_inner(
+    name: &str,
+    arguments_json: &str,
+    ctx: &ToolExecutionContext,
+) -> Result<String> {
     let args: serde_json::Value = serde_json::from_str(arguments_json).with_context(|| {
         format!(
             "Invalid JSON arguments for tool '{}': {}",
@@ -450,15 +653,16 @@ pub fn dispatch_tool(name: &str, arguments_json: &str) -> Result<String> {
             let ci = args["case_insensitive"].as_bool();
             let limit = args["head_limit"].as_u64().map(|v| v as usize);
             let offset = args["offset"].as_u64().map(|v| v as usize);
-            let ctx = args["context_lines"].as_u64().map(|v| v as usize);
-            search::grep_files(query, path, include, ci, limit, offset, ctx)
+            let ctx_lines = args["context_lines"].as_u64().map(|v| v as usize);
+            search::grep_files(query, path, include, ci, limit, offset, ctx_lines)
         }
         "shell" => {
             let cmd = args["command"]
                 .as_str()
                 .context("Missing 'command' argument")?;
             let timeout = args["timeout_secs"].as_u64();
-            shell::execute_shell(cmd, timeout)
+            let is_bg = args["is_background"].as_bool().or(Some(ctx.is_background));
+            shell::execute_shell_with_options(cmd, timeout, is_bg)
         }
         "read_tool_result" => {
             let id = args["result_id"]
@@ -553,6 +757,33 @@ pub fn dispatch_tool(name: &str, arguments_json: &str) -> Result<String> {
             let timeout_secs = args["timeout_secs"].as_u64();
             let limit = args["limit"].as_u64().map(|n| n as usize);
             dispatch_manage_task(action, task_id, timeout_secs, limit)
+        }
+        "knowledge_search" => {
+            let query = args["query"]
+                .as_str()
+                .context("Missing 'query' argument")?;
+            let top_k = args["top_k"].as_u64().map(|v| v as usize).unwrap_or(3);
+            knowledge::run_knowledge_search(query, top_k)
+        }
+        "git_status" => {
+            let repo_path = args["repo_path"].as_str();
+            let res = git::tool_git_status(repo_path)?;
+            serde_json::to_string_pretty(&res).context("Failed to serialize git status result")
+        }
+        "git_diff" => {
+            let repo_path = args["repo_path"].as_str();
+            let staged = args["staged"].as_bool().unwrap_or(false);
+            let file = args["file"].as_str();
+            git::tool_git_diff(repo_path, staged, file)
+        }
+        "git_commit" => {
+            let message = args["message"]
+                .as_str()
+                .context("Missing 'message' argument")?;
+            let repo_path = args["repo_path"].as_str();
+            let all = args["all"].as_bool().unwrap_or(false);
+            let res = git::tool_git_commit(message, repo_path, all)?;
+            serde_json::to_string_pretty(&res).context("Failed to serialize git commit result")
         }
         _ => {
             if mcp::McpManager::is_mcp_tool(name) {

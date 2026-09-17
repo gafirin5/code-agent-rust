@@ -150,6 +150,9 @@ pub struct App {
     pub metrics: Option<ProcessMetrics>,
     pub last_metrics_poll: Instant,
     pub metrics_sampler: CpuSampler,
+
+    // Visual animation tick
+    pub spinner_tick: usize,
 }
 
 impl App {
@@ -250,16 +253,46 @@ impl App {
             metrics: Some(initial_metrics),
             last_metrics_poll: Instant::now(),
             metrics_sampler,
+            spinner_tick: 0,
         }
     }
 
-    /// Periodic tick for telemetry polling (1 Hz cadence).
+    /// Periodic tick for telemetry polling and animation frames.
     pub fn tick(&mut self) {
+        self.spinner_tick = self.spinner_tick.wrapping_add(1);
         let now = Instant::now();
         if now.duration_since(self.last_metrics_poll) >= std::time::Duration::from_millis(1000) {
             let m = capture_metrics_with_cpu(None, &mut self.metrics_sampler);
             self.metrics = Some(m);
             self.last_metrics_poll = now;
+        }
+    }
+
+    /// Returns current spinner character frame for smooth animations.
+    pub fn spinner_char(&self) -> &'static str {
+        const FRAMES: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+        FRAMES[self.spinner_tick % FRAMES.len()]
+    }
+
+    /// Returns context-sensitive keybinding hints for the footer based on current focus.
+    pub fn contextual_hints(&self) -> (&'static str, &'static str) {
+        match self.focused_pane {
+            FocusedPane::Input => {
+                if self.agent_running {
+                    ("⌨ INPUT", "[Esc] Batalkan Agen  [Tab] Navigasi")
+                } else {
+                    ("⌨ INPUT", "[Enter] Kirim  [Tab] Pindah Panel  [F1-F4] Menu  [/] Perintah")
+                }
+            }
+            FocusedPane::Chat => {
+                ("💬 CHAT", "[↑/↓] Gulir  [PgUp/PgDn] Halaman  [Home/End] Awal/Akhir  [i/Enter] Ketik")
+            }
+            FocusedPane::Sidebar => match self.active_tab {
+                SidebarTab::Tasks => ("📋 TASKS", "[↑/↓] Pilih  [c] Batalkan  [x] Bersihkan Selesai  [Tab] Pindah"),
+                SidebarTab::Skills => ("🎯 SKILLS", "[↑/↓] Pilih  [Enter] Aktifkan Peran  [Tab] Pindah"),
+                SidebarTab::Provider => ("⚡ PROVIDER", "[↑/↓] Pilih  [Enter] Beralih  [Tab] Pindah"),
+                SidebarTab::Help => ("❓ HELP", "[F1-F4] Ganti Tab  [Tab] Kembali ke Input  [F5] Mode REPL"),
+            },
         }
     }
 
@@ -488,7 +521,13 @@ impl App {
                         self.set_status(format!("Skill diaktifkan: {}", s.name));
                         self.active_skill = Some(s);
                     } else {
-                        self.set_status(format!("Skill '{}' tidak ditemukan", requested));
+                        let root = crate::tools::filesystem::get_workspace_root();
+                        if let Some(dyn_skill) = crate::tools::skills::get_skill_by_name(requested, &root) {
+                            self.set_status(format!("Dynamic Skill diaktifkan: {}", dyn_skill.name));
+                            self.active_skill = Some(crate::Skill::from(dyn_skill));
+                        } else {
+                            self.set_status(format!("Skill '{}' tidak ditemukan", requested));
+                        }
                     }
                 } else {
                     self.set_status("Pilih skill dari sidebar Skills (Enter untuk memilih)");

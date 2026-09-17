@@ -4,6 +4,23 @@ Dokumen ini mencatat seluruh pembaruan, evolusi arsitektur, penyelesaian milesto
 
 ---
 
+## 🚀 Fase 5: Next-Generation Agent Modernization & Production Readiness (2026-09-17)
+
+Pembaruan besar **Fase 5** memperluas kapabilitas `ctrl-cli` dengan fitur-fitur otonom modern berstandar enterprise tanpa menambah runtime asynchronous (`tokio`) ataupun dependensi eksternal yang berat. Arsitektur tetap berpedoman teguh pada **Pure Rust (Edition 2021)**, determinisme tinggi, serta binary footprint ramping (< 3.5 MB).
+
+### 🌟 Rangkuman Inovasi Fase 5 (Phase 5 Highlights)
+
+| Milestone | Modul & Komponen | Fitur & Kapabilitas Utama |
+|---|---|---|
+| **M1. Dynamic Skills & BM25 RAG** | `src/tools/skills.rs`<br>`src/tools/knowledge.rs` | Auto-discovery skill dari direktori `skills/`, `.ctrl/skills/`, dan `prompts/` dengan parsing YAML frontmatter.<br>Slash commands `/skills list` dan `/skills info <name>`.<br>Mesin perankingan BM25 in-process berbasis BM25Okapi untuk Markdown knowledge base (`data/knowledge/`) yang diakses via tool `knowledge_search`. |
+| **M2. Guardrails & Immutable Audit** | `src/tools/guardrails.rs`<br>`src/tools/audit.rs` | Deteksi perintah shell destruktif (`rm -rf`, `del /s`, `format`, `git reset --hard`) dengan konfirmasi interaktif di mode REPL dan safe dry-run rejection di mode background.<br>Audit log append-only JSON terstruktur di `.ctrl/audit.log` mencatat setiap eksekusi tool, argumen, timestamp, dan status akhir. |
+| **M3. Web Dashboard SSE & Run API** | `src/server.rs`<br>`src/telemetry/mod.rs` | Endpoint Server-Sent Events (SSE) `GET /api/events` untuk streaming event task real-time dan keepalive ping `: ping\n\n`.<br>Endpoint `POST /api/tasks/run` untuk memicu eksekusi subagent task dari antarmuka web.<br>Penyempurnaan non-blocking socket loopback Windows (resolusi error 10053/10054/10060) dengan stack thread 128KB dan sub-microsecond mutex CPU sampling. |
+| **M4. Structured Git & Rollback** | `src/tools/git.rs`<br>`src/agent/checkpoint.rs` | Tool git terstruktur: `git_status`, `git_diff`, `git_commit` menggunakan irisan argumen aman (`Command::new("git")`).<br>Mekanisme multi-file snapshot rollback otomatis: metadata tersimpan di `.ctrl/checkpoints/<id>/manifest.json`.<br>Perintah REPL `/undo` dan `/undo list` untuk inspeksi riwayat dan pemulihan instan berkas termutasi. |
+| **M5. Terminal UX & Audio Alert** | `src/tui/highlight.rs`<br>`src/agent/tasks.rs`<br>`src/main.rs` | Pewarnaan sintaksis ANSI murni tanpa dependency parser berat untuk blok kode Markdown (Rust, Python, JavaScript, Shell, JSON).<br>Audio completion alert via terminal bell (`\x07`) yang dipicu saat tugas latar belakang selesai (didukung toggle `ALERT_ON_TASK_DONE`). |
+| **M6. Full Quality Verification** | 25 Test Suites & Clippy | 100% test pass rate di seluruh 25 file integrasi test suite (termasuk adversarial test dan stress socket).<br>Zero Clippy warnings (`cargo clippy --all-targets -- -D warnings`).<br>Biner release final Windows: **3.10 MB** (jauh di bawah batas ketat 3.5 MB). |
+
+---
+
 ## 🚀 Fase 4: Resource Telemetry, Profiling & Comprehensive Performance Benchmarks (2026-09-15)
 
 Pembaruan strategis **Fase 4** menghadirkan subsistem telemetri resource dan profiling internal yang mandiri, deterministik, dan berkinerja tinggi pada **ctrl-cli**, serta rangkaian benchmark performa otomatis komprehensif (5 suites, 83 passing assertions) untuk mengaudit dan memverifikasi batas konsumsi memori (RAM), CPU, penyimpanan persistent (disk), ukuran biner release, dan siklus hidup (*lifecycles*) thread, handle, dan socket OS.
