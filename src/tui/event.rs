@@ -173,6 +173,13 @@ fn handle_key_event(app: &mut App, key: KeyEvent) {
             app.request_clear();
             return;
         }
+        KeyCode::F(7) => {
+            app.active_tab = SidebarTab::Files;
+            app.focused_pane = FocusedPane::Sidebar;
+            app.refresh_workspace_files();
+            app.request_clear();
+            return;
+        }
         KeyCode::F(8) => {
             crate::tui::ui::toggle_command_palette();
             app.request_clear();
@@ -317,6 +324,11 @@ fn handle_chat_keys(app: &mut App, key: KeyEvent) {
         KeyCode::End => {
             app.auto_scroll = true;
         }
+        KeyCode::Char('t') => {
+            let mode = crate::tui::ui::cycle_tool_accordion_mode();
+            app.set_status(format!("🗂️ Mode Tool Results: {}", mode));
+            app.request_clear();
+        }
         KeyCode::Char('z') | KeyCode::Char(' ') => {
             let folded = crate::tui::ui::toggle_thought_folding();
             let msg = if folded {
@@ -416,6 +428,36 @@ fn handle_sidebar_keys(app: &mut App, key: KeyEvent) {
                 _ => {}
             }
         }
+        SidebarTab::Files => {
+            match key.code {
+                KeyCode::Up => {
+                    if app.selected_file_index > 0 {
+                        app.selected_file_index -= 1;
+                        app.update_file_preview();
+                    }
+                }
+                KeyCode::Down => {
+                    if app.selected_file_index + 1 < app.files_list.len() {
+                        app.selected_file_index += 1;
+                        app.update_file_preview();
+                    }
+                }
+                KeyCode::PageUp => {
+                    app.file_preview_scroll = app.file_preview_scroll.saturating_sub(6);
+                }
+                KeyCode::PageDown => {
+                    app.file_preview_scroll = app.file_preview_scroll.saturating_add(6);
+                }
+                KeyCode::Char('r') => {
+                    app.refresh_workspace_files();
+                    app.set_status("Daftar berkas & status git diperbarui.");
+                }
+                KeyCode::Enter => {
+                    app.update_file_preview();
+                }
+                _ => {}
+            }
+        }
         SidebarTab::Help => {
             // Can scroll or press Enter to return to input
             if key.code == KeyCode::Enter {
@@ -468,9 +510,18 @@ fn execute_palette_action(app: &mut App, action: &str) {
                 app.active_tab = SidebarTab::Provider;
                 app.focused_pane = FocusedPane::Sidebar;
             }
+            "tab_files" => {
+                app.active_tab = SidebarTab::Files;
+                app.focused_pane = FocusedPane::Sidebar;
+                app.refresh_workspace_files();
+            }
             "tab_help" => {
                 app.active_tab = SidebarTab::Help;
                 app.focused_pane = FocusedPane::Sidebar;
+            }
+            "toggle_tool_mode" => {
+                let mode = crate::tui::ui::cycle_tool_accordion_mode();
+                app.set_status(format!("🗂️ Mode Tool Results: {}", mode));
             }
             "compact" => {
                 let prov = app.providers_reg.get_active_provider();

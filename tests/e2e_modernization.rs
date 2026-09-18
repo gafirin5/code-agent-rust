@@ -1,6 +1,6 @@
 //! Comprehensive Offline E2E & Integration Test Suite for `ctrl-cli` Modernization (v0.3.0)
 //!
-//! Validates the 4-tier test architecture specified in `TEST_INFRA.md`:
+//! Validates the 4-tier test architecture specified in `docs/archive/TEST_INFRA.md`:
 //! - Tier 1: Feature & Contract Coverage (CLI 0.3.0, Gemini/Ollama protocols, Persistence, HTTP Server)
 //! - Tier 2: Boundary & Corner Cases (Path traversals, DAG cycles, socket cancellation abort)
 //! - Tier 3: Cross-Feature Combinations (DAG failure/cancellation cascades, crash recovery reconciliation)

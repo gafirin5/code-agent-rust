@@ -251,7 +251,7 @@ pub fn highlight_code_line_spans<'a>(line: &'a str, lang: &str) -> Vec<Span<'a>>
             if !trail.is_empty() {
                 spans.push(Span::raw(trail));
             }
-        } else if !lead.is_empty() && lead.chars().next().map_or(false, |c| c.is_ascii_uppercase()) {
+        } else if !lead.is_empty() && lead.chars().next().is_some_and(|c| c.is_ascii_uppercase()) {
             spans.push(Span::styled(
                 lead,
                 Style::default()

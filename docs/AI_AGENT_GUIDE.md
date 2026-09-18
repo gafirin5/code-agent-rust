@@ -46,9 +46,9 @@ graph TD
 
 ---
 
-## 3. Pelajaran Berharga & Jebakan Konkurensi (`DEAD_ENDS.md`)
+## 3. Pelajaran Berharga & Jebakan Konkurensi ([`archive/DEAD_ENDS.md`](./archive/DEAD_ENDS.md))
 
-Sebelum menyentuh logika konkurensi di `src/agent/tasks.rs` atau `src/agent/orchestrator.rs`, pelajari jebakan yang pernah dialami berikut:
+Sebelum menyentuh logika konkurensi di `src/agent/tasks.rs` atau `src/agent/orchestrator.rs`, pelajari jebakan yang pernah dialami di [archive/DEAD_ENDS.md](./archive/DEAD_ENDS.md) berikut:
 
 ### ⚠️ 1. Jangan Gunakan `thread::sleep` Statis untuk Menunggu Perubahan State
 - **Masalah**: Mengasumsikan thread worker akan berpindah dari `Queued` ke `Running` dalam 25ms sering gagal di Windows di bawah beban CPU tinggi.

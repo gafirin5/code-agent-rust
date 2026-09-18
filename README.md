@@ -368,20 +368,98 @@ Mode **TUI (*Terminal User Interface*)** pada `ctrl-cli` menghadirkan pengalaman
 
 ### 🌐 12. Mode Web Dashboard & REST API
 
-Jika kamu lebih menyukai tampilan grafis visual di web browser:
-```bash
-ctrl-cli serve --port 3000
-```
-Buka browser di **`http://127.0.0.1:3000`**.
+Selain mode terminal teks dan TUI fullscreen, `ctrl-cli` dilengkapi **Web Dashboard modern berbasis Single Page Application (SPA)** yang kaya fitur, responsif, dan **100% mandiri (zero external CDN, offline-ready)**. Dashboard ini didefinisikan pada file tunggal [`ctrl-cli/src/dashboard.html`](src/dashboard.html).
 
-#### Fitur Web Dashboard:
-* **Antarmuka Chat Grafis**: Mengetik dan membaca respons AI dengan syntax highlighting kode yang indah.
-* **Task Board**: Memantau daftar subagent yang sedang berjalan, waktu eksekusi, dan konsumsi resource.
-* **REST & SSE Endpoints**:
-  * `GET /api/health` — Pengecekan status server.
-  * `GET /api/tasks` — Mengambil daftar status task subagent.
-  * `POST /api/chat` — Mengirim instruksi baru ke agent.
-  * `GET /api/metrics` — Menampilkan metrik performa sistem (CPU, RAM, thread active).
+#### 🚀 Cara Menjalankan Web Dashboard:
+
+1. **Jalankan Server Lokal via CLI:**
+   ```bash
+   ctrl-cli serve --port 3000
+   ```
+   Buka browser di **`http://127.0.0.1:3000`**.
+
+2. **Akses Langsung via Berkas Lokal (`file:///`):**
+   Kamu juga dapat membuka berkas [`ctrl-cli/src/dashboard.html`](src/dashboard.html) langsung dengan klik ganda atau menyeretnya ke peramban (Chrome, Edge, Firefox). Antarmuka secara otomatis mendeteksi protokol berkas dan berkomunikasi dengan backend via CORS di port 3000.
+
+3. **Dynamic Hot-Reloading:**
+   Server HTTP secara dinamis membaca `ctrl-cli/src/dashboard.html` langsung dari disk saat request masuk. Setiap kali kamu memodifikasi file HTML/CSS/JS, kamu cukup menekan `F5` di browser untuk melihat hasilnya seketika tanpa perlu kompilasi ulang biner Rust!
+
+---
+
+#### 🎨 6 Tab Utama Web Dashboard:
+
+1. **📊 Ringkasan (Overview & Telemetri Real-Time):**
+   * **Live Sparkline Canvas**: Grafik visual mini interaktif pemantauan memori (RAM RSS) dan utilisasi CPU yang dirender langsung via HTML5 Canvas murni tanpa library grafik eksternal.
+   * **Kartu Telemetri Akurat**:
+     * **Memory (RSS / Working Set)**: Penggunaan RAM fisik proses saat ini dan nilai puncak (*peak memory*).
+     * **CPU Utilization**: Persentase utilisasi proses beserta rincian waktu komputasi Windows Kernel vs User mode (*user_ms* & *kernel_ms*).
+     * **Active Worker Threads**: Jumlah worker threads aktif dan jumlah OS handles yang dikelola oleh proses.
+     * **Active Tasks**: Jumlah subagent yang sedang berjalan vs total tugas selesai.
+     * **Storage (.ctrl/ Footprint)**: Jejak ukuran penyimpanan direktori kerja internal `.ctrl/` (task logs, cache BM25, checkpoints) beserta jumlah file.
+     * **Live Uptime & Jam Server**: Durasi waktu aktif server secara real-time (`Xs`, `Xm Ys`) dan timestamp sinkron.
+   * **⚡ Peluncur Cepat (Quick Action)**: 4 tombol template tugas sekali klik (Analisis Arsitektur Proyek, Diagnostik Self-Healing, Pencarian Knowledge Base RAG, Inspeksi Status Git).
+   * **🖥️ Info Sistem & Lingkungan**: Menampilkan path workspace aktif, sistem operasi & arsitektur CPU, serta model default yang digunakan.
+
+2. **🚀 Task Runner & Subagent Manager:**
+   * **Eksekusi Prompt Interaktif**: Input multi-line dengan pintasan `Ctrl+Enter` untuk submit.
+   * **Spesialisasi Persona (/skill)**: Dropdown pilihan peran agen (misal: `general`, `researcher`, `security-auditor`, dll.) yang ditarik dinamis dari API.
+   * **Model AI Override**: Kemudahan beralih model AI per tugas (Groq Llama 3.3, Ollama Qwen 2.5 Coder, OpenAI GPT-4o, Gemini Flash).
+   * **Filter & Pencarian Antrean**: Memfilter daftar tugas berdasarkan status (`Semua`, `Running`, `Completed`, `Failed`) serta kotak pencarian teks ID / prompt.
+   * **Terminal Log Inspector**: Tampilan log gelap bergaya terminal konsol dengan penyorotan warna otomatis (`✔ SUKSES`, `✖ GAGAL`, `INFO`). Dilengkapi tombol **Salin Log**, **Unduh Log (.txt)**, **Kunci Auto-scroll**, dan tombol **Batalkan Tugas (Cancel)** untuk tugas yang masih berjalan.
+
+3. **🧠 Skills & Knowledge Base (BM25 RAG):**
+   * **BM25 Search Playground**: Pengujian langsung mesin pencari relevansi Okapi BM25 terhadap dokumen internal proyek di `data/knowledge/` (seperti `company_policy.md`, `product_faqs.md`).
+   * Dilengkapi slider `top_k` (1–10) dan tombol kueri instan (`security`, `architecture`, `self-healing`, `policy`).
+   * Menampilkan kartu hasil terurut peringkat lengkap dengan nama file, judul sub-seksi, badge skor presisi BM25, dan potongan teks (snippet).
+   * **Katalog Persona Skills**: Eksplorasi skill yang terpasang dengan deskripsi peran, daftar tools yang diizinkan, dan tombol peluncur instan.
+
+4. **🛡️ Git & Checkpoints (/undo):**
+   * **Monitor Status Git**: Menampilkan branch aktif serta 3 panel pemantauan perubahan: File Staged (`+`), File Unstaged (`~`), dan File Untracked (`?`).
+   * **Riwayat Multi-File Checkpoint**: Daftar riwayat cadangan snapshot atomik dari direktori `.ctrl/checkpoints/` dengan timestamp dan berkas yang terdampak.
+   * **Tombol Rollback (/undo)**: Tombol pemulihan per-checkpoint serta tombol master **Undo Perubahan Terakhir** lengkap dengan dialog konfirmasi aman.
+
+5. **📋 Audit Trail:**
+   * Membaca dan menampilkan rekaman append-only dari `.ctrl/audit.log` ke dalam tabel terstruktur.
+   * Rincian kolom: Waktu kejadian, Nama Tool yang dipanggil, Status (`success` / `failed`), Durasi waktu eksekusi (ms), dan Parameter input JSON.
+   * Filter pencarian cepat berdasarkan kata kunci nama perkakas atau status.
+
+6. **⚡ Live Event Stream (SSE):**
+   * Pemantau aliran event real-time berbasis Server-Sent Events (`/api/events`).
+   * Menampilkan event `task_status`, `task_log`, dan `message` seketika saat subagent beroperasi di latar belakang.
+   * Kontrol aliran: Tombol **Jeda / Lanjutkan Aliran** dan **Bersihkan Layar**.
+
+---
+
+#### 💡 Catatan Penting Mengenai Metrik Telemetri (`/api/metrics`):
+
+* **Karakteristik Pure Rust (Zero-GC Efficiency):**
+  Berbeda dengan aplikasi berbasis Node.js, Python, atau JVM yang terus-menerus melakukan alokasi berkala dan siklus *garbage collection* (yang membuat grafik RAM naik-turun berkala seperti gergaji bahkan saat idle), `ctrl-cli` ditulis dalam **Rust murni tanpa runtime berat**.
+  - Saat dalam kondisi **Idle** (menunggu instruksi), penggunaan CPU berada di bawah `0.4%` dan memori stabil di kisaran `~9.2 MB` (RSS).
+  - Nilai ini **100% akurat dan dibaca langsung dari Windows OS Process API** (`GetProcessMemoryInfo` & `GetProcessTimes`), bukan simulasi data acak.
+  - Begitu tugas kompilasi atau LLM dijalankan, metrik dan grafik sparkline akan langsung meningkat dan merekam aktivitas secara proporsional.
+* **Storage Melacak Direktori `.ctrl/`:**
+  Kartu storage mengukur total ukuran data kerja internal pada folder `.ctrl/` (task logs, cache, snapshot), bukan sisa ruang kosong keseluruhan harddisk komputer.
+
+---
+
+#### 🔌 Daftar Lengkap REST & SSE Endpoints:
+
+| Metode | Endpoint URL | Fungsi & Deskripsi |
+| :--- | :--- | :--- |
+| `GET` | `/` | Menyajikan antarmuka visual Web Dashboard ([`dashboard.html`](src/dashboard.html)). |
+| `GET` | `/api/health` | Status kesehatan server HTTP dan timestamp terkini. |
+| `GET` | `/api/metrics` | Data telemetri real-time: Memory (RSS/Peak/Virt), CPU (pct/ms), Threads, OS Handles, Storage. |
+| `GET` | `/api/system/info` | Informasi sistem: Workspace root path, OS & arsitektur, dan default model. |
+| `GET` | `/api/skills` | Mengambil daftar seluruh persona skill yang tersedia di proyek. |
+| `POST` | `/api/knowledge/search` | Mencari dokumen relevan pada knowledge base menggunakan algoritma Okapi BM25. |
+| `GET` | `/api/git/status` | Mengambil status repositori Git (branch aktif, staged, unstaged, untracked). |
+| `GET` | `/api/checkpoints` | Mengambil riwayat snapshot cadangan multi-file dari direktori `.ctrl/checkpoints/`. |
+| `POST` | `/api/checkpoints/rollback` | Melakukan pemulihan file kerja ke kondisi snapshot checkpoint tertentu (`/undo`). |
+| `GET` | `/api/audit` | Membaca riwayat catatan audit keamanan dari `.ctrl/audit.log`. |
+| `GET` | `/api/tasks` | Mengambil daftar seluruh tugas subagent beserta status dan log-nya. |
+| `POST` | `/api/tasks` | Meluncurkan tugas subagent baru di latar belakang (menerima prompt, skill, model). |
+| `DELETE` | `/api/tasks/:id` | Membatalkan / menghentikan eksekusi subagent yang sedang berjalan. |
+| `GET` | `/api/events` | Aliran event Server-Sent Events (SSE) real-time untuk log dan status tugas. |
 
 ---
 
@@ -469,14 +547,18 @@ code-agent-rust/
 
 ### 📚 16. Pusat Dokumentasi Lengkap
 
-Ingin mempelajari dokumentasi spesifik untuk topik tertentu? Silakan kunjungi:
-* 📝 [**Catatan Update & Rilis (`docs/UPDATE_NOTES.md`)**](./docs/UPDATE_NOTES.md)
+Untuk panduan teknis mendalam, arsitektur, dan referensi tools lengkap, silakan kunjungi [**Master Documentation Hub (`docs/README.md`)**](./docs/README.md):
+
+* 🗺️ [**Pusat Indeks Dokumentasi (`docs/README.md`)**](./docs/README.md)
+* 🤖 [**Buku Panduan AI Agent (`docs/AI_AGENT_GUIDE.md`)**](./docs/AI_AGENT_GUIDE.md)
+* 🏗️ [**Arsitektur Sistem & Concurrency (`docs/ARCHITECTURE.md`)**](./docs/ARCHITECTURE.md)
+* 🛠️ [**Referensi 15 Built-in Tools (`docs/TOOLS_REFERENCE.md`)**](./docs/TOOLS_REFERENCE.md)
 * 📊 [**Hasil Uji Performa Komprehensif (`docs/PERFORMANCE.md`)**](./docs/PERFORMANCE.md)
 * ⚙️ [**Panduan Konfigurasi Lengkap (`docs/CONFIGURATION.md`)**](./docs/CONFIGURATION.md)
-* 🏗️ [**Arsitektur Sistem & Concurrency (`docs/ARCHITECTURE.md`)**](./docs/ARCHITECTURE.md)
-* 🤖 [**Buku Panduan AI Agent (`docs/AI_AGENT_GUIDE.md`)**](./docs/AI_AGENT_GUIDE.md)
-* 🛠️ [**Referensi 15+ Built-in Tools (`docs/TOOLS_REFERENCE.md`)**](./docs/TOOLS_REFERENCE.md)
+* 📝 [**Catatan Update & Rilis (`docs/UPDATE_NOTES.md`)**](./docs/UPDATE_NOTES.md)
+* 📋 [**Backlog Pembersihan & Maintenance (`docs/CLEANUP_BACKLOG.md`)**](./docs/CLEANUP_BACKLOG.md)
 * 🗺️ [**Roadmap Pengembangan Fitur (`docs/ROADMAP.md`)**](./docs/ROADMAP.md)
+* 🏛️ [**Arsip Catatan Historis & Milestone (`docs/archive/`)**](./docs/archive/)
 
 ---
 
@@ -512,7 +594,7 @@ Ingin mempelajari dokumentasi spesifik untuk topik tertentu? Silakan kunjungi:
 #### 🎮 4 Operational Modes:
 * **Fullscreen Modern TUI**: `.\tui` / `cargo tui` / `ctrl-cli -t` (or type `tui` in REPL).
 * **Interactive REPL**: `cargo run` (chat with `/help`, `/undo`, `/diff`, `/model`, `/skill`).
-* **Web Dashboard**: `cargo run -- serve` (visit `http://127.0.0.1:3000`).
+* **Web Dashboard**: `ctrl-cli serve` or `cargo run -- serve` (visit `http://127.0.0.1:3000` or open `src/dashboard.html` directly in browser).
 * **One-Shot Command**: `cargo run -- generate "prompt..."`.
 
 For comprehensive technical architecture, tools reference, and benchmarks, check the [Technical Docs](./docs/README.md).

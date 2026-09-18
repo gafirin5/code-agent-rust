@@ -2007,7 +2007,7 @@ impl TaskManager {
         Ok(())
     }
 
-    /// Convenience method matching PROJECT.md interface contract:
+    /// Convenience method matching docs/archive/PROJECT.md interface contract:
     /// returns true if cancellation succeeded, false if not found or already terminal.
     pub fn cancel(&self, id: &str) -> bool {
         self.cancel_task(id).is_ok()

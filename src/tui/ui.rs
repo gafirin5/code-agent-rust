@@ -11,11 +11,12 @@ use ratatui::{
 
 use crate::agent::tasks::{TaskManager, TaskStatus};
 use crate::get_available_skills;
-use crate::tui::app::{App, ChatItemKind, FocusedPane, SidebarTab};
+use crate::tui::app::{App, ChatItemKind, FocusedPane, GitFileBadge, SidebarTab};
 use std::borrow::Cow;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Mutex;
 
+#[allow(clippy::duplicate_mod)]
 #[path = "highlight.rs"]
 pub mod highlight;
 use highlight::{get_language_label, highlight_code_line_spans};
@@ -44,7 +45,8 @@ fn get_contextual_hints(app: &App) -> (&'static str, &'static str) {
             SidebarTab::Tasks => ("📋 TASKS", "[↑/↓] Pilih  [c] Batalkan  [x] Bersihkan Selesai  [Tab] Pindah"),
             SidebarTab::Skills => ("🎯 SKILLS", "[↑/↓] Pilih  [Enter] Aktifkan Peran  [Tab] Pindah"),
             SidebarTab::Provider => ("⚡ PROVIDER", "[↑/↓] Pilih  [Enter] Beralih  [Tab] Pindah"),
-            SidebarTab::Help => ("❓ HELP", "[F1-F4] Ganti Tab  [Tab] Kembali ke Input  [F5] Mode REPL"),
+            SidebarTab::Files => ("📂 FILES", "[↑/↓] Pilih  [Tab] Pindah"),
+            SidebarTab::Help => ("❓ HELP", "[F1-F5] Ganti Tab  [Tab] Kembali ke Input  [F5] Mode REPL"),
         },
     }
 }
@@ -136,6 +138,44 @@ pub fn is_thought_process_folded() -> bool {
     THOUGHT_PROCESS_FOLDED.load(Ordering::Relaxed)
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ToolAccordionMode {
+    Compact,
+    Preview,
+    Full,
+}
+
+pub static TOOL_ACCORDION_MODE: AtomicUsize = AtomicUsize::new(1); // default 1 = Preview
+
+pub fn get_tool_accordion_mode() -> ToolAccordionMode {
+    match TOOL_ACCORDION_MODE.load(Ordering::Relaxed) % 3 {
+        0 => ToolAccordionMode::Compact,
+        1 => ToolAccordionMode::Preview,
+        2 => ToolAccordionMode::Full,
+        _ => ToolAccordionMode::Preview,
+    }
+}
+
+pub fn cycle_tool_accordion_mode() -> &'static str {
+    let next = (TOOL_ACCORDION_MODE.load(Ordering::Relaxed) + 1) % 3;
+    TOOL_ACCORDION_MODE.store(next, Ordering::Relaxed);
+    match next {
+        0 => "Compact (Accordion 1 baris)",
+        1 => "Preview (Ringkasan 6 baris)",
+        2 => "Full (Output lengkap)",
+        _ => "Preview",
+    }
+}
+
+pub fn set_tool_accordion_mode(mode: ToolAccordionMode) {
+    let val = match mode {
+        ToolAccordionMode::Compact => 0,
+        ToolAccordionMode::Preview => 1,
+        ToolAccordionMode::Full => 2,
+    };
+    TOOL_ACCORDION_MODE.store(val, Ordering::Relaxed);
+}
+
 #[derive(Clone, Copy, Debug)]
 pub struct PaletteCommand {
     pub icon: &'static str,
@@ -152,6 +192,8 @@ pub const PALETTE_COMMANDS: &[PaletteCommand] = &[
     PaletteCommand { icon: "🎨", title: "Ganti Tema: Monokai Pro", shortcut: "F6", action_id: "theme:4" },
     PaletteCommand { icon: "🪟", title: "Toggle Zen Mode (Sidebar)", shortcut: "F9", action_id: "zen" },
     PaletteCommand { icon: "💭", title: "Toggle Lipat Thought Process", shortcut: "z", action_id: "fold_thought" },
+    PaletteCommand { icon: "🗂️", title: "Ganti Mode Tool Results (Accordion/Preview/Full)", shortcut: "t", action_id: "toggle_tool_mode" },
+    PaletteCommand { icon: "📂", title: "Buka Tab Workspace & Git Explorer", shortcut: "F7", action_id: "tab_files" },
     PaletteCommand { icon: "🧹", title: "Bersihkan Chat Stream", shortcut: "Ctrl+L", action_id: "clear_chat" },
     PaletteCommand { icon: "📋", title: "Buka Tab Background Tasks", shortcut: "F2", action_id: "tab_tasks" },
     PaletteCommand { icon: "🎯", title: "Buka Tab AI Skills", shortcut: "F3", action_id: "tab_skills" },
@@ -790,10 +832,10 @@ fn render_chat(frame: &mut Frame, app: &mut App, area: Rect, theme: &Theme) {
                             ];
                             line_spans.extend(parse_markdown_spans(&text_line[2..], theme));
                             lines.push(Line::from(line_spans));
-                        } else if text_line.starts_with("> ") {
+                        } else if let Some(stripped) = text_line.strip_prefix("> ") {
                             lines.push(Line::from(vec![
                                 Span::styled("│  ▎ ", Style::default().fg(theme.secondary)),
-                                Span::styled(&text_line[2..], Style::default().fg(theme.text_dim).add_modifier(Modifier::ITALIC)),
+                                Span::styled(stripped, Style::default().fg(theme.text_dim).add_modifier(Modifier::ITALIC)),
                             ]));
                         } else {
                             let mut line_spans = vec![
@@ -865,34 +907,78 @@ fn render_chat(frame: &mut Frame, app: &mut App, area: Rect, theme: &Theme) {
                 } else {
                     ("✖ GAGAL", theme.error)
                 };
-                lines.push(Line::from(vec![
-                    Span::styled(format!("╭─ {} ", sym), Style::default().fg(col).add_modifier(Modifier::BOLD)),
-                    Span::styled(format!("( {} )", name), Style::default().fg(theme.primary).add_modifier(Modifier::BOLD)),
-                    Span::styled(" ──────────────────────────────────", Style::default().fg(theme.border_subtle)),
-                ]));
 
                 let all_lines: Vec<&str> = result.lines().collect();
-                let limit = 6;
-                let preview = &all_lines[..all_lines.len().min(limit)];
-                for r in preview {
-                    lines.push(Line::from(vec![
-                        Span::styled("│  ", Style::default().fg(theme.border_subtle)),
-                        Span::styled(*r, Style::default().fg(theme.text_main)),
-                    ]));
+
+                match get_tool_accordion_mode() {
+                    ToolAccordionMode::Compact => {
+                        lines.push(Line::from(vec![
+                            Span::styled("╭─ ⚙ [", Style::default().fg(theme.border_subtle)),
+                            Span::styled(sym, Style::default().fg(col).add_modifier(Modifier::BOLD)),
+                            Span::styled("] ", Style::default().fg(theme.border_subtle)),
+                            Span::styled(name, Style::default().fg(theme.primary).add_modifier(Modifier::BOLD)),
+                            Span::styled(format!(" ({} baris output)", all_lines.len()), Style::default().fg(theme.text_dim)),
+                            Span::styled(" ── [t: Expand] ────────────────────╯", Style::default().fg(theme.border_subtle)),
+                        ]));
+                        lines.push(Line::raw(""));
+                    }
+                    ToolAccordionMode::Preview => {
+                        lines.push(Line::from(vec![
+                            Span::styled(format!("╭─ {} ", sym), Style::default().fg(col).add_modifier(Modifier::BOLD)),
+                            Span::styled(format!("( {} )", name), Style::default().fg(theme.primary).add_modifier(Modifier::BOLD)),
+                            Span::styled(" ──────────────────────────────────", Style::default().fg(theme.border_subtle)),
+                        ]));
+
+                        let limit = 6;
+                        let preview = &all_lines[..all_lines.len().min(limit)];
+                        for r in preview {
+                            lines.push(Line::from(vec![
+                                Span::styled("│  ", Style::default().fg(theme.border_subtle)),
+                                Span::styled(*r, Style::default().fg(theme.text_main)),
+                            ]));
+                        }
+                        if all_lines.len() > limit {
+                            lines.push(Line::from(vec![
+                                Span::styled("│  ", Style::default().fg(theme.border_subtle)),
+                                Span::styled(
+                                    format!("... (+{} baris tersembunyi • tekan 't' untuk mode Full)", all_lines.len() - limit),
+                                    Style::default().fg(theme.accent).add_modifier(Modifier::ITALIC),
+                                ),
+                            ]));
+                        }
+                        lines.push(Line::from(vec![
+                            Span::styled("╰───────────────────────────────────────────────────", Style::default().fg(theme.border_subtle)),
+                        ]));
+                        lines.push(Line::raw(""));
+                    }
+                    ToolAccordionMode::Full => {
+                        lines.push(Line::from(vec![
+                            Span::styled(format!("╭─ {} [FULL] ", sym), Style::default().fg(col).add_modifier(Modifier::BOLD)),
+                            Span::styled(format!("( {} )", name), Style::default().fg(theme.primary).add_modifier(Modifier::BOLD)),
+                            Span::styled(" ── [t: Lipat] ──────────────────────", Style::default().fg(theme.border_subtle)),
+                        ]));
+
+                        for (idx, r) in all_lines.iter().enumerate() {
+                            let line_no = format!("{:3} │ ", idx + 1);
+                            let content_style = if r.starts_with('+') && !r.starts_with("+++") {
+                                Style::default().fg(theme.success)
+                            } else if r.starts_with('-') && !r.starts_with("---") {
+                                Style::default().fg(theme.error)
+                            } else {
+                                Style::default().fg(theme.text_main)
+                            };
+                            lines.push(Line::from(vec![
+                                Span::styled("│  ", Style::default().fg(theme.border_subtle)),
+                                Span::styled(line_no, Style::default().fg(theme.text_dim)),
+                                Span::styled(*r, content_style),
+                            ]));
+                        }
+                        lines.push(Line::from(vec![
+                            Span::styled("╰───────────────────────────────────────────────────", Style::default().fg(theme.border_subtle)),
+                        ]));
+                        lines.push(Line::raw(""));
+                    }
                 }
-                if all_lines.len() > limit {
-                    lines.push(Line::from(vec![
-                        Span::styled("│  ", Style::default().fg(theme.border_subtle)),
-                        Span::styled(
-                            format!("... (+{} baris disembunyikan)", all_lines.len() - limit),
-                            Style::default().fg(theme.text_dim).add_modifier(Modifier::ITALIC),
-                        ),
-                    ]));
-                }
-                lines.push(Line::from(vec![
-                    Span::styled("╰───────────────────────────────────────────────────", Style::default().fg(theme.border_subtle)),
-                ]));
-                lines.push(Line::raw(""));
             }
             ChatItemKind::SystemInfo => {
                 lines.push(Line::from(vec![
@@ -1062,6 +1148,7 @@ fn render_sidebar(frame: &mut Frame, app: &mut App, area: Rect, theme: &Theme) {
                     SidebarTab::Tasks => "📋 Tasks (F2)",
                     SidebarTab::Skills => "🎯 Skills (F3)",
                     SidebarTab::Provider => "⚡ Prov (F4)",
+                    SidebarTab::Files => "📂 Files (F7)",
                     SidebarTab::Help => "❓ Help (F1)",
                 }
             } else if area.width >= 35 {
@@ -1069,6 +1156,7 @@ fn render_sidebar(frame: &mut Frame, app: &mut App, area: Rect, theme: &Theme) {
                     SidebarTab::Tasks => "Tasks(F2)",
                     SidebarTab::Skills => "Skills(F3)",
                     SidebarTab::Provider => "Prov(F4)",
+                    SidebarTab::Files => "Files(F7)",
                     SidebarTab::Help => "Help(F1)",
                 }
             } else {
@@ -1076,6 +1164,7 @@ fn render_sidebar(frame: &mut Frame, app: &mut App, area: Rect, theme: &Theme) {
                     SidebarTab::Tasks => "F2",
                     SidebarTab::Skills => "F3",
                     SidebarTab::Provider => "F4",
+                    SidebarTab::Files => "F7",
                     SidebarTab::Help => "F1",
                 }
             };
@@ -1099,7 +1188,8 @@ fn render_sidebar(frame: &mut Frame, app: &mut App, area: Rect, theme: &Theme) {
         SidebarTab::Tasks => 0,
         SidebarTab::Skills => 1,
         SidebarTab::Provider => 2,
-        SidebarTab::Help => 3,
+        SidebarTab::Files => 3,
+        SidebarTab::Help => 4,
     };
 
     let tabs_widget = Tabs::new(tab_titles)
@@ -1125,6 +1215,7 @@ fn render_sidebar(frame: &mut Frame, app: &mut App, area: Rect, theme: &Theme) {
         SidebarTab::Tasks => render_tasks_tab(frame, app, sidebar_layout[1], theme),
         SidebarTab::Skills => render_skills_tab(frame, app, sidebar_layout[1], theme),
         SidebarTab::Provider => render_provider_tab(frame, app, sidebar_layout[1], theme),
+        SidebarTab::Files => render_files_tab(frame, app, sidebar_layout[1], theme),
         SidebarTab::Help => render_help_tab(frame, app, sidebar_layout[1], theme),
     }
 }
@@ -1409,6 +1500,149 @@ fn render_provider_tab(frame: &mut Frame, app: &App, area: Rect, theme: &Theme) 
     frame.render_widget(list, area);
 }
 
+fn render_files_tab(frame: &mut Frame, app: &App, area: Rect, theme: &Theme) {
+    frame.render_widget(Clear, area);
+
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Percentage(50), // File list table
+            Constraint::Percentage(50), // File preview / git diff
+        ])
+        .split(area);
+
+    frame.render_widget(Clear, chunks[0]);
+    frame.render_widget(Clear, chunks[1]);
+
+    // 1. Files List Table
+    let rows: Vec<Row> = app
+        .files_list
+        .iter()
+        .enumerate()
+        .map(|(i, f)| {
+            let is_sel = i == app.selected_file_index;
+            let sel_indicator = if is_sel { "▶ " } else { "  " };
+            let icon = if f.is_dir { "📁 " } else { "📄 " };
+            let name_str = format!("{}{}{}", sel_indicator, icon, f.relative_path);
+
+            let (git_str, git_style) = match f.git_status {
+                Some(GitFileBadge::Modified) => ("MODIFIED", Style::default().fg(theme.warning).add_modifier(Modifier::BOLD)),
+                Some(GitFileBadge::Staged) => ("STAGED", Style::default().fg(theme.success).add_modifier(Modifier::BOLD)),
+                Some(GitFileBadge::Untracked) => ("NEW", Style::default().fg(theme.primary).add_modifier(Modifier::BOLD)),
+                Some(GitFileBadge::Deleted) => ("DELETED", Style::default().fg(theme.error).add_modifier(Modifier::BOLD)),
+                None => ("-", Style::default().fg(theme.text_dim)),
+            };
+
+            let size_str = if f.is_dir {
+                "-".to_string()
+            } else if f.size_bytes < 1024 {
+                format!("{} B", f.size_bytes)
+            } else if f.size_bytes < 1024 * 1024 {
+                format!("{:.1} KB", f.size_bytes as f64 / 1024.0)
+            } else {
+                format!("{:.1} MB", f.size_bytes as f64 / (1024.0 * 1024.0))
+            };
+
+            let row_style = if is_sel {
+                Style::default().bg(theme.highlight_bg).fg(theme.text_bright)
+            } else {
+                Style::default().fg(theme.text_main)
+            };
+
+            Row::new(vec![
+                ratatui::widgets::Cell::from(name_str),
+                ratatui::widgets::Cell::from(git_str).style(git_style),
+                ratatui::widgets::Cell::from(size_str).style(Style::default().fg(theme.text_dim)),
+            ])
+            .style(row_style)
+        })
+        .collect();
+
+    let is_focused = app.focused_pane == FocusedPane::Sidebar;
+    let border_color = if is_focused {
+        theme.border_focused
+    } else {
+        theme.border_normal
+    };
+
+    let table = Table::new(
+        rows,
+        [
+            Constraint::Percentage(55),
+            Constraint::Percentage(25),
+            Constraint::Percentage(20),
+        ],
+    )
+    .header(
+        Row::new(vec!["NAMA BERKAS", "STATUS GIT", "UKURAN"])
+            .style(Style::default().fg(theme.accent).add_modifier(Modifier::BOLD))
+            .bottom_margin(1),
+    )
+    .block(
+        Block::default()
+            .title(" 📂 Workspace & Git Files [r: Refresh] ")
+            .borders(Borders::ALL)
+            .border_type(BorderType::Rounded)
+            .border_style(Style::default().fg(border_color)),
+    );
+
+    frame.render_widget(table, chunks[0]);
+
+    // 2. File Preview / Diff Pane
+    let selected_name = app
+        .files_list
+        .get(app.selected_file_index)
+        .map(|f| f.relative_path.as_str())
+        .unwrap_or("Pilih Berkas");
+
+    let preview_title = format!(" 🔍 Preview: {} [PgUp/PgDn: Gulir] ", selected_name);
+
+    let preview_lines: Vec<Line> = if let Some(ref content) = app.file_preview_content {
+        let is_diff = content.starts_with("--- Git Diff");
+        content
+            .lines()
+            .skip(app.file_preview_scroll as usize)
+            .take(chunks[1].height.saturating_sub(2) as usize)
+            .enumerate()
+            .map(|(idx, l)| {
+                if is_diff {
+                    let style = if l.starts_with('+') && !l.starts_with("+++") {
+                        Style::default().fg(theme.success)
+                    } else if l.starts_with('-') && !l.starts_with("---") {
+                        Style::default().fg(theme.error)
+                    } else if l.starts_with("@@") {
+                        Style::default().fg(theme.accent).add_modifier(Modifier::BOLD)
+                    } else {
+                        Style::default().fg(theme.text_dim)
+                    };
+                    Line::from(Span::styled(l, style))
+                } else {
+                    let line_no = (app.file_preview_scroll as usize) + idx + 1;
+                    Line::from(vec![
+                        Span::styled(format!("{:3} │ ", line_no), Style::default().fg(theme.text_dim)),
+                        Span::styled(l, Style::default().fg(theme.text_main)),
+                    ])
+                }
+            })
+            .collect()
+    } else {
+        vec![Line::from(Span::styled(
+            "  (Tidak ada pratinjau yang tersedia)",
+            Style::default().fg(theme.text_dim).add_modifier(Modifier::ITALIC),
+        ))]
+    };
+
+    let preview_para = Paragraph::new(preview_lines).block(
+        Block::default()
+            .title(preview_title)
+            .borders(Borders::ALL)
+            .border_type(BorderType::Rounded)
+            .border_style(Style::default().fg(theme.border_normal)),
+    );
+
+    frame.render_widget(preview_para, chunks[1]);
+}
+
 fn render_help_tab(frame: &mut Frame, _app: &App, area: Rect, theme: &Theme) {
     frame.render_widget(Clear, area);
     let keycap = |k: &'static str| Span::styled(k, Style::default().fg(theme.primary).add_modifier(Modifier::BOLD));
@@ -1469,6 +1703,11 @@ fn render_help_tab(frame: &mut Frame, _app: &App, area: Rect, theme: &Theme) {
         ]),
         Line::from(vec![
             Span::raw("  "),
+            keycap("[F7] / /files"),
+            desc("    : Tab Workspace & Git Explorer (Pohon berkas & git diff)"),
+        ]),
+        Line::from(vec![
+            Span::raw("  "),
             keycap("[F8] / [Ctrl+P]"),
             desc("  : Buka Command Palette (pencarian aksi modal cepat)"),
         ]),
@@ -1476,6 +1715,11 @@ fn render_help_tab(frame: &mut Frame, _app: &App, area: Rect, theme: &Theme) {
             Span::raw("  "),
             keycap("[F9] / [Ctrl+B]"),
             desc("  : Toggle Zen Mode (sembunyikan / tampilkan sidebar)"),
+        ]),
+        Line::from(vec![
+            Span::raw("  "),
+            keycap("[t]"),
+            desc("              : Ganti mode tampilan tool (Compact / Preview / Full)"),
         ]),
         Line::from(vec![
             Span::raw("  "),
@@ -1757,7 +2001,7 @@ fn render_footer(frame: &mut Frame, app: &App, area: Rect, theme: &Theme) {
         ])
     };
 
-    let limit = app.providers_reg.get_active_provider().context_window.unwrap_or(128_000) as u64;
+    let limit = app.providers_reg.get_active_provider().context_window.unwrap_or(128_000);
     let pct = if limit > 0 {
         ((app.total_tokens as f64 / limit as f64) * 100.0).min(100.0) as usize
     } else {
@@ -2200,6 +2444,24 @@ mod tests {
 
         close_command_palette();
         assert!(!is_command_palette_open());
+    }
+
+    #[test]
+    fn test_tool_accordion_mode_cycling() {
+        set_tool_accordion_mode(ToolAccordionMode::Compact);
+        assert_eq!(get_tool_accordion_mode(), ToolAccordionMode::Compact);
+
+        let next = cycle_tool_accordion_mode();
+        assert_eq!(get_tool_accordion_mode(), ToolAccordionMode::Preview);
+        assert!(next.contains("Preview"));
+
+        let next2 = cycle_tool_accordion_mode();
+        assert_eq!(get_tool_accordion_mode(), ToolAccordionMode::Full);
+        assert!(next2.contains("Full"));
+
+        let next3 = cycle_tool_accordion_mode();
+        assert_eq!(get_tool_accordion_mode(), ToolAccordionMode::Compact);
+        assert!(next3.contains("Compact"));
     }
 }
 

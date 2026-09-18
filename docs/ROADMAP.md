@@ -110,7 +110,7 @@ Fokus pada kecerdasan domain spesifik dan basis pengetahuan proyek.
 Fokus pada integrasi visual antara CLI dan antarmuka browser.
 
 - [ ] **Embedded Web Server untuk Visual Dashboard**:
-  - Memanfaatkan berkas [`index.html`](../index.html) yang sudah tersedia di root repositori.
+  - Memanfaatkan berkas visual dashboard mandiri di [`src/dashboard.html`](../src/dashboard.html) (Zero-CDN).
   - Menjalankan mini HTTP server lokal (port misal `127.0.0.1:3030`) melalui perintah `ctrl-cli serve` atau flag `--web`.
 - [ ] **Live Task Monitoring via SSE / WebSocket**:
   - Web dashboard menampilkan grafik status subagent, pemakaian memori, token counter, dan output log secara real-time langsung dari browser pengguna.

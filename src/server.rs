@@ -3,37 +3,38 @@ use anyhow::{Context, Result};
 use serde_json::json;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
-use std::path::PathBuf;
 use std::thread;
 use std::time::{Duration, Instant};
 
+#[allow(clippy::duplicate_mod)]
 #[path = "telemetry/mod.rs"]
 pub mod telemetry;
 
-/// Compile-time fallback for the dashboard HTML if file cannot be read from disk.
-const EMBEDDED_INDEX_HTML: &str = include_str!("../../index.html");
+/// Embedded dashboard HTML for the ctrl-cli web UI (compiled into the binary).
+const DASHBOARD_HTML: &str = include_str!("dashboard.html");
 
-/// Resolves the repository root `index.html` from filesystem candidates, falling back to embedded HTML.
-fn resolve_index_html() -> &'static str {
-    static CACHED_HTML: std::sync::OnceLock<String> = std::sync::OnceLock::new();
-    CACHED_HTML.get_or_init(|| {
-        let candidates = [
-            PathBuf::from("index.html"),
-            PathBuf::from("../index.html"),
-            PathBuf::from("../../index.html"),
-            PathBuf::from(r"C:\Users\Administrator\code-agent-rust\index.html"),
-        ];
-
-        for candidate in &candidates {
-            if candidate.is_file() {
-                if let Ok(content) = std::fs::read_to_string(candidate) {
-                    return content;
-                }
+/// Returns the dashboard HTML content, reading from disk if available to allow live edits to dashboard.html,
+/// falling back to the embedded binary copy.
+fn resolve_index_html() -> std::borrow::Cow<'static, str> {
+    let ws = std::env::var("CTRL_WORKSPACE_ROOT")
+        .ok()
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from(".")));
+    let candidates = [
+        ws.join("ctrl-cli").join("src").join("dashboard.html"),
+        ws.join("src").join("dashboard.html"),
+        std::path::PathBuf::from("ctrl-cli/src/dashboard.html"),
+        std::path::PathBuf::from("src/dashboard.html"),
+        std::path::PathBuf::from("dashboard.html"),
+    ];
+    for p in candidates {
+        if let Ok(content) = std::fs::read_to_string(&p) {
+            if !content.trim().is_empty() {
+                return std::borrow::Cow::Owned(content);
             }
         }
-
-        EMBEDDED_INDEX_HTML.to_string()
-    })
+    }
+    std::borrow::Cow::Borrowed(DASHBOARD_HTML)
 }
 
 /// Sends a formatted HTTP/1.1 response with standard security and CORS headers.
@@ -448,7 +449,7 @@ mod tests {
         let html = resolve_index_html();
         assert!(!html.is_empty());
         assert!(html.contains("<!DOCTYPE html>"));
-        assert!(html.contains("MyWeb") || html.contains("CTRL") || html.contains("<html"));
+        assert!(html.contains("ctrl-cli") || html.contains("CTRL") || html.contains("dashboard"));
     }
 
     #[test]
@@ -680,3 +681,4 @@ mod tests {
         assert!(join_res.is_ok(), "Server handle must join cleanly");
     }
 }
+

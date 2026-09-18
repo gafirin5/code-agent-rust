@@ -35,6 +35,7 @@ pub enum SidebarTab {
     Tasks,
     Skills,
     Provider,
+    Files,
     Help,
 }
 
@@ -44,6 +45,7 @@ impl SidebarTab {
             SidebarTab::Tasks,
             SidebarTab::Skills,
             SidebarTab::Provider,
+            SidebarTab::Files,
             SidebarTab::Help,
         ]
     }
@@ -53,6 +55,7 @@ impl SidebarTab {
             SidebarTab::Tasks => "Tasks (F2)",
             SidebarTab::Skills => "Skills (F3)",
             SidebarTab::Provider => "Provider (F4)",
+            SidebarTab::Files => "Files (F7)",
             SidebarTab::Help => "Help (F1)",
         }
     }
@@ -81,6 +84,33 @@ pub struct ChatItem {
     pub kind: ChatItemKind,
     pub text: String,
     pub timestamp: String,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GitFileBadge {
+    Modified,
+    Staged,
+    Untracked,
+    Deleted,
+}
+
+impl GitFileBadge {
+    pub fn label(&self) -> &'static str {
+        match self {
+            GitFileBadge::Modified => "MODIFIED",
+            GitFileBadge::Staged => "STAGED",
+            GitFileBadge::Untracked => "UNTRACKED",
+            GitFileBadge::Deleted => "DELETED",
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct FileTreeItem {
+    pub relative_path: String,
+    pub is_dir: bool,
+    pub size_bytes: u64,
+    pub git_status: Option<GitFileBadge>,
 }
 
 pub enum UiAction {
@@ -118,6 +148,10 @@ pub struct App {
     pub selected_task_index: usize,
     pub selected_skill_index: usize,
     pub selected_provider_index: usize,
+    pub selected_file_index: usize,
+    pub files_list: Vec<FileTreeItem>,
+    pub file_preview_content: Option<String>,
+    pub file_preview_scroll: u16,
     pub task_log_scroll: u16,
 
     // Agent loop state
@@ -213,7 +247,7 @@ impl App {
             }
         }
 
-        Self {
+        let mut app = Self {
             user_profile,
             providers_reg,
             current_model,
@@ -234,6 +268,10 @@ impl App {
             selected_task_index: 0,
             selected_skill_index: 0,
             selected_provider_index: 0,
+            selected_file_index: 0,
+            files_list: Vec::new(),
+            file_preview_content: None,
+            file_preview_scroll: 0,
             task_log_scroll: 0,
             agent_running: false,
             streaming_reasoning: String::new(),
@@ -256,7 +294,9 @@ impl App {
             last_metrics_poll: Instant::now(),
             metrics_sampler,
             spinner_tick: 0,
-        }
+        };
+        app.refresh_workspace_files();
+        app
     }
 
     /// Requests a clean terminal buffer reset before next frame render.
@@ -288,17 +328,18 @@ impl App {
                 if self.agent_running {
                     ("⌨ INPUT", "[Esc] Batalkan Agen  [Tab] Navigasi")
                 } else {
-                    ("⌨ INPUT", "[Enter] Kirim  [Tab] Pindah Panel  [F1-F4] Menu  [/] Perintah")
+                    ("⌨ INPUT", "[Enter] Kirim  [Tab] Pindah Panel  [F1-F7] Menu  [/] Perintah")
                 }
             }
             FocusedPane::Chat => {
-                ("💬 CHAT", "[↑/↓] Gulir  [PgUp/PgDn] Halaman  [Home/End] Awal/Akhir  [i/Enter] Ketik")
+                ("💬 CHAT", "[↑/↓] Gulir  [t] Mode Tool  [z] Lipat Reasoning  [i/Enter] Ketik")
             }
             FocusedPane::Sidebar => match self.active_tab {
                 SidebarTab::Tasks => ("📋 TASKS", "[↑/↓] Pilih  [c] Batalkan  [x] Bersihkan Selesai  [Tab] Pindah"),
                 SidebarTab::Skills => ("🎯 SKILLS", "[↑/↓] Pilih  [Enter] Aktifkan Peran  [Tab] Pindah"),
                 SidebarTab::Provider => ("⚡ PROVIDER", "[↑/↓] Pilih  [Enter] Beralih  [Tab] Pindah"),
-                SidebarTab::Help => ("❓ HELP", "[F1-F4] Ganti Tab  [Tab] Kembali ke Input  [F5] Mode REPL"),
+                SidebarTab::Files => ("📂 FILES", "[↑/↓] Pilih  [Enter] Preview  [r] Refresh  [PgUp/PgDn] Gulir  [Tab] Pindah"),
+                SidebarTab::Help => ("❓ HELP", "[F1-F7] Ganti Tab  [Tab] Kembali ke Input  [F5] Mode REPL"),
             },
         }
     }
@@ -572,6 +613,12 @@ impl App {
                     self.set_status("Tab Provider aktif");
                 }
             }
+            "/files" | "/file" | "/git" => {
+                self.active_tab = SidebarTab::Files;
+                self.refresh_workspace_files();
+                self.request_clear();
+                self.set_status("Tab Workspace Files & Git Explorer aktif");
+            }
             "/compact" => {
                 let prov = self.providers_reg.get_active_provider();
                 let limit = prov.context_window.unwrap_or(128_000);
@@ -842,6 +889,136 @@ impl App {
             let _ = req.response_tx.send(resp);
         }
     }
+
+    pub fn refresh_workspace_files(&mut self) {
+        let root = crate::tools::filesystem::get_workspace_root();
+        let git_status = crate::tools::git::tool_git_status(Some(root.to_str().unwrap_or("."))).ok();
+
+        let mut items = Vec::new();
+        if let Ok(entries) = std::fs::read_dir(&root) {
+            let mut dirs = Vec::new();
+            let mut files = Vec::new();
+
+            for entry in entries.flatten() {
+                let path = entry.path();
+                let file_name = entry.file_name().to_string_lossy().to_string();
+
+                if file_name.starts_with('.') && file_name != ".gitignore" {
+                    continue;
+                }
+                if file_name == "target" || file_name == "node_modules" {
+                    continue;
+                }
+
+                let is_dir = path.is_dir();
+                let size_bytes = entry.metadata().map(|m| m.len()).unwrap_or(0);
+
+                let badge = if let Some(ref gs) = git_status {
+                    if gs.unstaged.iter().any(|p| p == &file_name || p.starts_with(&format!("{}/", file_name)) || p.starts_with(&format!("{}\\", file_name))) {
+                        Some(GitFileBadge::Modified)
+                    } else if gs.staged.iter().any(|p| p == &file_name || p.starts_with(&format!("{}/", file_name)) || p.starts_with(&format!("{}\\", file_name))) {
+                        Some(GitFileBadge::Staged)
+                    } else if gs.untracked.iter().any(|p| p == &file_name || p.starts_with(&format!("{}/", file_name)) || p.starts_with(&format!("{}\\", file_name))) {
+                        Some(GitFileBadge::Untracked)
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                };
+
+                let item = FileTreeItem {
+                    relative_path: file_name,
+                    is_dir,
+                    size_bytes,
+                    git_status: badge,
+                };
+
+                if is_dir {
+                    dirs.push(item);
+                } else {
+                    files.push(item);
+                }
+            }
+
+            dirs.sort_by_key(|a| a.relative_path.to_lowercase());
+            files.sort_by_key(|a| a.relative_path.to_lowercase());
+
+            items.extend(dirs);
+            items.extend(files);
+        }
+
+        self.files_list = items;
+        if self.files_list.is_empty() {
+            self.selected_file_index = 0;
+        } else if self.selected_file_index >= self.files_list.len() {
+            self.selected_file_index = self.files_list.len() - 1;
+        }
+        self.update_file_preview();
+    }
+
+    pub fn update_file_preview(&mut self) {
+        self.file_preview_scroll = 0;
+        if let Some(item) = self.files_list.get(self.selected_file_index) {
+            let root = crate::tools::filesystem::get_workspace_root();
+            let full_path = root.join(&item.relative_path);
+
+            if item.is_dir {
+                if let Ok(sub) = std::fs::read_dir(&full_path) {
+                    let mut count = 0;
+                    let mut names = Vec::new();
+                    for s in sub.flatten() {
+                        let name = s.file_name().to_string_lossy().to_string();
+                        if name.starts_with('.') && name != ".gitignore" {
+                            continue;
+                        }
+                        count += 1;
+                        if names.len() < 15 {
+                            let icon = if s.path().is_dir() { "📁 " } else { "📄 " };
+                            names.push(format!("  {} {}", icon, name));
+                        }
+                    }
+                    let preview = format!(
+                        "📁 Direktori: {} ({} entri)\n\nCuplikan isi direktori:\n{}",
+                        item.relative_path,
+                        count,
+                        if names.is_empty() { "  (kosong)".to_string() } else { names.join("\n") }
+                    );
+                    self.file_preview_content = Some(preview);
+                } else {
+                    self.file_preview_content = Some(format!("📁 Direktori: {}", item.relative_path));
+                }
+            } else {
+                let diff_opt = if item.git_status.is_some() {
+                    crate::tools::git::tool_git_diff(
+                        Some(root.to_str().unwrap_or(".")),
+                        false,
+                        Some(&item.relative_path),
+                    ).ok().filter(|d| !d.trim().is_empty())
+                } else {
+                    None
+                };
+
+                if let Some(diff) = diff_opt {
+                    self.file_preview_content = Some(format!("--- Git Diff ({}) ---\n{}", item.relative_path, diff));
+                } else if let Ok(content) = std::fs::read_to_string(&full_path) {
+                    let preview = content
+                        .lines()
+                        .take(120)
+                        .collect::<Vec<_>>()
+                        .join("\n");
+                    self.file_preview_content = Some(preview);
+                } else {
+                    self.file_preview_content = Some(format!(
+                        "📄 [Berkas Biner / Non-UTF8]\nPath: {}\nUkuran: {} bytes",
+                        item.relative_path, item.size_bytes
+                    ));
+                }
+            }
+        } else {
+            self.file_preview_content = None;
+        }
+    }
 }
 
 fn mpsc_channel_bridge(tx: Sender<UiAction>) -> Sender<AgentUiEvent> {
@@ -859,4 +1036,24 @@ fn mpsc_channel_bridge(tx: Sender<UiAction>) -> Sender<AgentUiEvent> {
 fn chrono_compact_now() -> String {
     use std::time::SystemTime;
     crate::agent::tasks::format_utc_timestamp(SystemTime::now())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_sidebar_tab_files_and_refresh() {
+        assert!(SidebarTab::all().contains(&SidebarTab::Files));
+        assert_eq!(SidebarTab::Files.title(), "Files (F7)");
+
+        let user_profile = UserProfile::default();
+        let providers_reg = ProvidersRegistry::default();
+        let mut app = App::new(user_profile, providers_reg);
+
+        app.active_tab = SidebarTab::Files;
+        app.refresh_workspace_files();
+        assert!(!app.files_list.is_empty());
+        assert!(app.file_preview_content.is_some());
+    }
 }

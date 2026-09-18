@@ -107,16 +107,33 @@ pub mod tui {
             Tasks,
             Skills,
             Provider,
+            Files,
             Help,
         }
 
         impl SidebarTab {
             pub fn all() -> &'static [SidebarTab] {
-                &[SidebarTab::Tasks, SidebarTab::Skills, SidebarTab::Provider, SidebarTab::Help]
+                &[SidebarTab::Tasks, SidebarTab::Skills, SidebarTab::Provider, SidebarTab::Files, SidebarTab::Help]
             }
             pub fn title(&self) -> &'static str {
                 "Tab"
             }
+        }
+
+        #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+        pub enum GitFileBadge {
+            Modified,
+            Staged,
+            Untracked,
+            Deleted,
+        }
+
+        #[derive(Clone, Debug)]
+        pub struct FileTreeItem {
+            pub relative_path: String,
+            pub is_dir: bool,
+            pub size_bytes: u64,
+            pub git_status: Option<GitFileBadge>,
         }
 
         #[derive(Clone, Debug)]
@@ -158,6 +175,10 @@ pub mod tui {
             pub selected_task_index: usize,
             pub selected_skill_index: usize,
             pub selected_provider_index: usize,
+            pub selected_file_index: usize,
+            pub files_list: Vec<FileTreeItem>,
+            pub file_preview_content: Option<String>,
+            pub file_preview_scroll: u16,
             pub task_log_scroll: u16,
             pub agent_running: bool,
             pub streaming_reasoning: String,
@@ -202,6 +223,10 @@ pub mod tui {
                     selected_task_index: 0,
                     selected_skill_index: 0,
                     selected_provider_index: 0,
+                    selected_file_index: 0,
+                    files_list: Vec::new(),
+                    file_preview_content: None,
+                    file_preview_scroll: 0,
                     task_log_scroll: 0,
                     agent_running: false,
                     streaming_reasoning: String::new(),
