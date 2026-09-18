@@ -31,6 +31,9 @@ pub fn handle_events(app: &mut App) -> anyhow::Result<()> {
                 }
                 _ => {}
             },
+            Event::Resize(_, _) => {
+                app.request_clear();
+            }
             _ => {}
         }
     }
@@ -67,6 +70,7 @@ fn handle_key_event(app: &mut App, key: KeyEvent) {
         match key.code {
             KeyCode::Esc => {
                 crate::tui::ui::close_command_palette();
+                app.request_clear();
             }
             KeyCode::Up => {
                 crate::tui::ui::palette_move_up();
@@ -88,6 +92,7 @@ fn handle_key_event(app: &mut App, key: KeyEvent) {
                 } else {
                     crate::tui::ui::close_command_palette();
                 }
+                app.request_clear();
             }
             _ => {}
         }
@@ -109,10 +114,12 @@ fn handle_key_event(app: &mut App, key: KeyEvent) {
             KeyCode::Char('l') => {
                 app.chat_items.clear();
                 app.set_status("Layar chat dibersihkan.");
+                app.request_clear();
                 return;
             }
             KeyCode::Char('p') => {
                 crate::tui::ui::toggle_command_palette();
+                app.request_clear();
                 return;
             }
             KeyCode::Char('b') => {
@@ -123,6 +130,7 @@ fn handle_key_event(app: &mut App, key: KeyEvent) {
                     "🪟 Sidebar ditampilkan kembali"
                 };
                 app.set_status(msg);
+                app.request_clear();
                 return;
             }
             _ => {}
@@ -134,21 +142,25 @@ fn handle_key_event(app: &mut App, key: KeyEvent) {
         KeyCode::F(1) => {
             app.active_tab = SidebarTab::Help;
             app.focused_pane = FocusedPane::Sidebar;
+            app.request_clear();
             return;
         }
         KeyCode::F(2) => {
             app.active_tab = SidebarTab::Tasks;
             app.focused_pane = FocusedPane::Sidebar;
+            app.request_clear();
             return;
         }
         KeyCode::F(3) => {
             app.active_tab = SidebarTab::Skills;
             app.focused_pane = FocusedPane::Sidebar;
+            app.request_clear();
             return;
         }
         KeyCode::F(4) => {
             app.active_tab = SidebarTab::Provider;
             app.focused_pane = FocusedPane::Sidebar;
+            app.request_clear();
             return;
         }
         KeyCode::F(5) => {
@@ -158,10 +170,12 @@ fn handle_key_event(app: &mut App, key: KeyEvent) {
         KeyCode::F(6) => {
             let next_theme = crate::tui::ui::cycle_theme();
             app.set_status(format!("🎨 Tema diubah ke: {} (F6 untuk rotasi)", next_theme));
+            app.request_clear();
             return;
         }
         KeyCode::F(8) => {
             crate::tui::ui::toggle_command_palette();
+            app.request_clear();
             return;
         }
         KeyCode::F(9) => {
@@ -172,6 +186,7 @@ fn handle_key_event(app: &mut App, key: KeyEvent) {
                 "🪟 Sidebar ditampilkan kembali"
             };
             app.set_status(msg);
+            app.request_clear();
             return;
         }
         _ => {}
@@ -411,6 +426,7 @@ fn handle_sidebar_keys(app: &mut App, key: KeyEvent) {
 }
 
 fn execute_palette_action(app: &mut App, action: &str) {
+    app.request_clear();
     if let Some(idx_str) = action.strip_prefix("theme:") {
         if let Ok(idx) = idx_str.parse::<usize>() {
             let name = crate::tui::ui::set_theme_by_index(idx);

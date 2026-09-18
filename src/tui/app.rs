@@ -140,6 +140,7 @@ pub struct App {
     pub status_message: Option<(String, Instant)>,
     pub should_quit: bool,
     pub return_to_repl: bool,
+    pub needs_clear: bool,
 
     // Communication channels
     pub action_tx: Sender<UiAction>,
@@ -247,6 +248,7 @@ impl App {
             status_message: None,
             should_quit: false,
             return_to_repl: false,
+            needs_clear: false,
             action_tx,
             action_rx,
             perm_tx,
@@ -255,6 +257,11 @@ impl App {
             metrics_sampler,
             spinner_tick: 0,
         }
+    }
+
+    /// Requests a clean terminal buffer reset before next frame render.
+    pub fn request_clear(&mut self) {
+        self.needs_clear = true;
     }
 
     /// Periodic tick for telemetry polling and animation frames.
@@ -476,6 +483,7 @@ impl App {
         match primary_lower.as_str() {
             "/help" | "?" | "/?" => {
                 self.active_tab = SidebarTab::Help;
+                self.request_clear();
                 self.set_status("Menampilkan tab bantuan");
             }
             "/clear" | "/reset" => {
@@ -487,10 +495,12 @@ impl App {
                     text: "Riwayat percakapan berhasil dikosongkan. Sesi baru dimulai.".to_string(),
                     timestamp: timestamp.to_string(),
                 });
+                self.request_clear();
                 self.set_status("Riwayat percakapan dibersihkan");
             }
             "/tasks" => {
                 self.active_tab = SidebarTab::Tasks;
+                self.request_clear();
                 if parts.len() > 1 {
                     let sub = parts[1];
                     let tm = TaskManager::global();
@@ -511,6 +521,7 @@ impl App {
             }
             "/skill" | "/skills" => {
                 self.active_tab = SidebarTab::Skills;
+                self.request_clear();
                 if parts.len() > 1 {
                     let requested = parts[1];
                     let skills = get_available_skills();
@@ -539,11 +550,13 @@ impl App {
                     self.set_status(format!("Model aktif disetel ke: {}", self.current_model));
                 } else {
                     self.active_tab = SidebarTab::Provider;
+                    self.request_clear();
                     self.set_status("Lihat atau ganti konfigurasi model di tab Provider");
                 }
             }
             "/provider" | "/providers" => {
                 self.active_tab = SidebarTab::Provider;
+                self.request_clear();
                 if parts.len() > 2 && (parts[1] == "switch" || parts[1] == "use") {
                     let target = parts[2];
                     if let Ok(p) = self.providers_reg.switch_active(target) {
@@ -588,6 +601,7 @@ impl App {
                 }
             }
             "/theme" | "/themes" => {
+                self.request_clear();
                 if parts.len() > 1 {
                     let req = parts[1..].join(" ");
                     if let Some(applied) = crate::tui::ui::set_theme_by_name(&req) {
@@ -606,6 +620,7 @@ impl App {
             }
             "/zen" | "/sidebar" => {
                 let collapsed = crate::tui::ui::toggle_sidebar();
+                self.request_clear();
                 let msg = if collapsed {
                     "🪟 Zen Mode aktif (Sidebar disembunyikan - F9 / Ctrl+B untuk membuka)"
                 } else {

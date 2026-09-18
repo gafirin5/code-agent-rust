@@ -406,6 +406,9 @@ pub fn render(frame: &mut Frame, app: &mut App) {
     let theme = Theme::current();
     let size = frame.area();
 
+    // Clear entire frame buffer first to eliminate any ghost cells or leftover text
+    frame.render_widget(Clear, size);
+
     // Main vertical layout: Header, Main Body (Chat + Sidebar), Input & Status
     let main_chunks = Layout::default()
         .direction(Direction::Vertical)
@@ -439,6 +442,8 @@ pub fn render(frame: &mut Frame, app: &mut App) {
 }
 
 fn render_header(frame: &mut Frame, app: &App, area: Rect, theme: &Theme) {
+    frame.render_widget(Clear, area);
+
     let active_prov = app.providers_reg.get_active_provider();
     let skill_name = app
         .active_skill
@@ -519,60 +524,64 @@ fn render_header(frame: &mut Frame, app: &App, area: Rect, theme: &Theme) {
         ),
     ];
 
-    let title_line = Line::from(
-        vec![
-            Span::styled(
-                " ⚡ CTRL-CLI ",
-                Style::default()
-                    .bg(theme.primary)
-                    .fg(Color::Rgb(24, 28, 36))
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(
-                concat!(" v", env!("CARGO_PKG_VERSION"), " "),
-                Style::default().fg(theme.text_dim),
-            ),
-            Span::styled("│ ", Style::default().fg(theme.border_subtle)),
-            Span::styled("Provider: ", Style::default().fg(theme.text_dim)),
-            Span::styled(
-                format!("{} ", active_prov.name),
-                Style::default()
-                    .fg(theme.primary)
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::styled("│ ", Style::default().fg(theme.border_subtle)),
-            Span::styled("Model: ", Style::default().fg(theme.text_dim)),
-            Span::styled(
-                format!("{} ", app.current_model),
-                Style::default()
-                    .fg(theme.text_bright)
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::styled("│ ", Style::default().fg(theme.border_subtle)),
-            Span::styled("Skill: ", Style::default().fg(theme.text_dim)),
-            Span::styled(
-                format!("🎯 {} ", skill_name),
-                Style::default()
-                    .fg(theme.secondary)
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::styled("│ ", Style::default().fg(theme.border_subtle)),
-            Span::styled("Status: ", Style::default().fg(theme.text_dim)),
-        ]
-        .into_iter()
-        .chain(status_spans)
-        .chain(git_spans)
-        .chain(theme_spans)
-        .chain(zen_spans)
-        .collect::<Vec<_>>(),
-    );
+    let mut title_spans = vec![
+        Span::styled(
+            " ⚡ CTRL-CLI ",
+            Style::default()
+                .bg(theme.primary)
+                .fg(Color::Rgb(24, 28, 36))
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            concat!(" v", env!("CARGO_PKG_VERSION"), " "),
+            Style::default().fg(theme.text_dim),
+        ),
+        Span::styled("│ ", Style::default().fg(theme.border_subtle)),
+        Span::styled("Provider: ", Style::default().fg(theme.text_dim)),
+        Span::styled(
+            format!("{} ", active_prov.name),
+            Style::default()
+                .fg(theme.primary)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled("│ ", Style::default().fg(theme.border_subtle)),
+        Span::styled("Model: ", Style::default().fg(theme.text_dim)),
+        Span::styled(
+            format!("{} ", app.current_model),
+            Style::default()
+                .fg(theme.text_bright)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled("│ ", Style::default().fg(theme.border_subtle)),
+        Span::styled("Skill: ", Style::default().fg(theme.text_dim)),
+        Span::styled(
+            format!("🎯 {} ", skill_name),
+            Style::default()
+                .fg(theme.secondary)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled("│ ", Style::default().fg(theme.border_subtle)),
+        Span::styled("Status: ", Style::default().fg(theme.text_dim)),
+    ];
+    title_spans.extend(status_spans);
+
+    // Conditionally include optional badges only if terminal width permits to avoid wrapping overflow
+    if area.width >= 105 {
+        title_spans.extend(git_spans);
+    }
+    if area.width >= 120 {
+        title_spans.extend(theme_spans);
+    }
+    if area.width >= 135 {
+        title_spans.extend(zen_spans);
+    }
 
     let block = Block::default()
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
         .border_style(Style::default().fg(theme.border_normal));
 
-    let header_para = Paragraph::new(title_line).block(block);
+    let header_para = Paragraph::new(Line::from(title_spans)).block(block);
     frame.render_widget(header_para, area);
 }
 
@@ -613,6 +622,7 @@ fn parse_markdown_spans<'a>(text: &'a str, theme: &Theme) -> Vec<Span<'a>> {
 }
 
 fn render_body(frame: &mut Frame, app: &mut App, area: Rect, theme: &Theme) {
+    frame.render_widget(Clear, area);
     if is_sidebar_collapsed() {
         render_chat(frame, app, area, theme);
     } else {
@@ -630,6 +640,7 @@ fn render_body(frame: &mut Frame, app: &mut App, area: Rect, theme: &Theme) {
 }
 
 fn render_chat(frame: &mut Frame, app: &mut App, area: Rect, theme: &Theme) {
+    frame.render_widget(Clear, area);
     let is_focused = app.focused_pane == FocusedPane::Chat;
     let border_color = if is_focused {
         theme.border_focused
@@ -1022,6 +1033,8 @@ fn render_chat(frame: &mut Frame, app: &mut App, area: Rect, theme: &Theme) {
 }
 
 fn render_sidebar(frame: &mut Frame, app: &mut App, area: Rect, theme: &Theme) {
+    frame.render_widget(Clear, area);
+
     let is_focused = app.focused_pane == FocusedPane::Sidebar;
     let border_color = if is_focused {
         theme.border_focused
@@ -1037,26 +1050,45 @@ fn render_sidebar(frame: &mut Frame, app: &mut App, area: Rect, theme: &Theme) {
         ])
         .split(area);
 
+    frame.render_widget(Clear, sidebar_layout[0]);
+    frame.render_widget(Clear, sidebar_layout[1]);
+
     let tab_titles: Vec<Line> = SidebarTab::all()
         .iter()
         .map(|t| {
             let is_sel = *t == app.active_tab;
-            let title = match t {
-                SidebarTab::Tasks => "📋 Tasks (F2)",
-                SidebarTab::Skills => "🎯 Skills (F3)",
-                SidebarTab::Provider => "⚡ Provider (F4)",
-                SidebarTab::Help => "❓ Help (F1)",
+            let title = if area.width >= 50 {
+                match t {
+                    SidebarTab::Tasks => "📋 Tasks (F2)",
+                    SidebarTab::Skills => "🎯 Skills (F3)",
+                    SidebarTab::Provider => "⚡ Prov (F4)",
+                    SidebarTab::Help => "❓ Help (F1)",
+                }
+            } else if area.width >= 35 {
+                match t {
+                    SidebarTab::Tasks => "Tasks(F2)",
+                    SidebarTab::Skills => "Skills(F3)",
+                    SidebarTab::Provider => "Prov(F4)",
+                    SidebarTab::Help => "Help(F1)",
+                }
+            } else {
+                match t {
+                    SidebarTab::Tasks => "F2",
+                    SidebarTab::Skills => "F3",
+                    SidebarTab::Provider => "F4",
+                    SidebarTab::Help => "F1",
+                }
             };
             if is_sel {
                 Line::from(Span::styled(
-                    format!(" [ {} ] ", title),
+                    format!("[{}]", title),
                     Style::default()
                         .fg(theme.primary)
                         .add_modifier(Modifier::BOLD),
                 ))
             } else {
                 Line::from(Span::styled(
-                    format!("   {}   ", title),
+                    format!(" {} ", title),
                     Style::default().fg(theme.text_dim),
                 ))
             }
@@ -1086,6 +1118,9 @@ fn render_sidebar(frame: &mut Frame, app: &mut App, area: Rect, theme: &Theme) {
 
     frame.render_widget(tabs_widget, sidebar_layout[0]);
 
+    // Explicitly wipe tab content area before rendering child tab view
+    frame.render_widget(Clear, sidebar_layout[1]);
+
     match app.active_tab {
         SidebarTab::Tasks => render_tasks_tab(frame, app, sidebar_layout[1], theme),
         SidebarTab::Skills => render_skills_tab(frame, app, sidebar_layout[1], theme),
@@ -1095,6 +1130,8 @@ fn render_sidebar(frame: &mut Frame, app: &mut App, area: Rect, theme: &Theme) {
 }
 
 fn render_tasks_tab(frame: &mut Frame, app: &mut App, area: Rect, theme: &Theme) {
+    frame.render_widget(Clear, area);
+
     let tasks_layout = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
@@ -1102,6 +1139,9 @@ fn render_tasks_tab(frame: &mut Frame, app: &mut App, area: Rect, theme: &Theme)
             Constraint::Percentage(45), // Task logs preview
         ])
         .split(area);
+
+    frame.render_widget(Clear, tasks_layout[0]);
+    frame.render_widget(Clear, tasks_layout[1]);
 
     let tm = TaskManager::global();
     let task_snapshots = tm.list_tasks();
@@ -1216,6 +1256,7 @@ fn render_tasks_tab(frame: &mut Frame, app: &mut App, area: Rect, theme: &Theme)
 }
 
 fn render_skills_tab(frame: &mut Frame, app: &App, area: Rect, theme: &Theme) {
+    frame.render_widget(Clear, area);
     let skills = get_available_skills();
     let items: Vec<ListItem> = skills
         .iter()
@@ -1291,6 +1332,7 @@ fn render_skills_tab(frame: &mut Frame, app: &App, area: Rect, theme: &Theme) {
 }
 
 fn render_provider_tab(frame: &mut Frame, app: &App, area: Rect, theme: &Theme) {
+    frame.render_widget(Clear, area);
     let active_id = &app.providers_reg.active_provider_id;
     let items: Vec<ListItem> = app
         .providers_reg
@@ -1368,6 +1410,7 @@ fn render_provider_tab(frame: &mut Frame, app: &App, area: Rect, theme: &Theme) 
 }
 
 fn render_help_tab(frame: &mut Frame, _app: &App, area: Rect, theme: &Theme) {
+    frame.render_widget(Clear, area);
     let keycap = |k: &'static str| Span::styled(k, Style::default().fg(theme.primary).add_modifier(Modifier::BOLD));
     let slash = |s: &'static str| Span::styled(s, Style::default().fg(theme.accent).add_modifier(Modifier::BOLD));
     let desc = |d: &'static str| Span::styled(d, Style::default().fg(theme.text_main));
@@ -1527,6 +1570,7 @@ fn render_help_tab(frame: &mut Frame, _app: &App, area: Rect, theme: &Theme) {
 }
 
 fn render_input(frame: &mut Frame, app: &App, area: Rect, theme: &Theme) {
+    frame.render_widget(Clear, area);
     let is_focused = app.focused_pane == FocusedPane::Input;
     let border_color = if is_focused {
         theme.border_focused
@@ -1680,6 +1724,8 @@ pub fn render_footer_telemetry_line(
 }
 
 fn render_footer(frame: &mut Frame, app: &App, area: Rect, theme: &Theme) {
+    frame.render_widget(Clear, area);
+
     let (focus_name, hints) = get_contextual_hints(app);
 
     let status_line = if let Some((msg, _)) = &app.status_message {
@@ -1735,7 +1781,7 @@ fn render_footer(frame: &mut Frame, app: &App, area: Rect, theme: &Theme) {
             Span::styled(bar_str, Style::default().fg(gauge_color).add_modifier(Modifier::BOLD)),
             Span::styled(format!(" {}% │ ", pct), Style::default().fg(gauge_color)),
             Span::styled(
-                format!("Tok: {} in / {} out ", app.total_prompt_tokens, app.total_completion_tokens),
+                format!("Tok: {} in / {} out", app.total_prompt_tokens, app.total_completion_tokens),
                 Style::default().fg(theme.text_dim),
             ),
         ])
@@ -1743,13 +1789,23 @@ fn render_footer(frame: &mut Frame, app: &App, area: Rect, theme: &Theme) {
         Line::from(vec![
             Span::styled("Ctx ", Style::default().fg(theme.text_dim)),
             Span::styled(format!("{}% ", pct), Style::default().fg(gauge_color).add_modifier(Modifier::BOLD)),
-            Span::styled(format!("({} tok) ", app.total_tokens), Style::default().fg(theme.text_dim)),
+            Span::styled(format!("({} tok)", app.total_tokens), Style::default().fg(theme.text_dim)),
         ])
     } else {
         Line::from(vec![])
     };
 
-    let layout = if area.width >= 115 {
+    // Leave the very last column (width - 1) on the bottom row completely untouched.
+    // In Windows Console Host (conhost.exe), writing a character to (width-1, height-1) triggers
+    // an automatic line wrap/scroll event that shifts the entire screen buffer up by 1 line!
+    let safe_footer_area = Rect {
+        x: area.x,
+        y: area.y,
+        width: area.width.saturating_sub(1),
+        height: area.height,
+    };
+
+    let layout = if safe_footer_area.width >= 114 {
         Layout::default()
             .direction(Direction::Horizontal)
             .constraints([
@@ -1757,8 +1813,8 @@ fn render_footer(frame: &mut Frame, app: &App, area: Rect, theme: &Theme) {
                 Constraint::Length(38),
                 Constraint::Length(45),
             ])
-            .split(area)
-    } else if area.width >= 80 {
+            .split(safe_footer_area)
+    } else if safe_footer_area.width >= 79 {
         Layout::default()
             .direction(Direction::Horizontal)
             .constraints([
@@ -1766,7 +1822,7 @@ fn render_footer(frame: &mut Frame, app: &App, area: Rect, theme: &Theme) {
                 Constraint::Length(38),
                 Constraint::Length(22),
             ])
-            .split(area)
+            .split(safe_footer_area)
     } else {
         Layout::default()
             .direction(Direction::Horizontal)
@@ -1775,7 +1831,7 @@ fn render_footer(frame: &mut Frame, app: &App, area: Rect, theme: &Theme) {
                 Constraint::Length(0),
                 Constraint::Length(0),
             ])
-            .split(area)
+            .split(safe_footer_area)
     };
 
     let status_para = Paragraph::new(status_line);
@@ -1784,7 +1840,7 @@ fn render_footer(frame: &mut Frame, app: &App, area: Rect, theme: &Theme) {
     let token_para = Paragraph::new(token_line).alignment(Alignment::Right);
 
     frame.render_widget(status_para, layout[0]);
-    if area.width >= 80 {
+    if safe_footer_area.width >= 79 {
         frame.render_widget(telemetry_para, layout[1]);
         frame.render_widget(token_para, layout[2]);
     }

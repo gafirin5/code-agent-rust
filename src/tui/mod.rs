@@ -97,8 +97,15 @@ pub fn run_tui(
 
     let mut app = App::new(user_profile.clone(), providers_reg.clone());
 
+    // Clean initial screen buffer for reliable flicker-free rendering
+    terminal.clear()?;
+
     // Main TUI render & event loop
     while !app.should_quit {
+        if app.needs_clear {
+            terminal.clear()?;
+            app.needs_clear = false;
+        }
         terminal.draw(|frame| ui::render(frame, &mut app))?;
         if let Err(e) = event::handle_events(&mut app) {
             app.set_status(format!("Event error: {}", e));
