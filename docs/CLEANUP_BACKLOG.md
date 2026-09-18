@@ -11,14 +11,14 @@ Dokumen ini mencatat ide, rekomendasi, dan rencana pembersihan/pemeliharaan (*ti
 | **Opsi 1** | **Refaktorisasi `main.rs` (Dekomposisi "God File" 3.600+ baris)** |  **SELESAI (Completed)** | P0 |
 | **Opsi 2** | **Directory Cleanup & Sinkronisasi Dokumentasi (Dual README & Top-Level Docs)** | ✅ **SELESAI (Completed)** | P1 |
 | **Opsi 3** | **Disk Hygiene & Manajemen Artefak Sementara (Target, Cache, & `.ctrl/`)** | ⏳ **Backlog (Ready for Next Sprint)** | P2 |
-| **Opsi 4** | **Git Hygiene & Version Control Setup (Inisialisasi Git & Audit `.gitignore`)** | ⏳ **Backlog (Ready for Next Sprint)** | P1 |
+| **Opsi 4** | **Git Hygiene & Version Control Setup (Inisialisasi Git & Audit `.gitignore`)** | ✅ **SELESAI (Completed & Pushed)** | P1 |
 
 ---
 
 ## ✅ Opsi 1: Refaktorisasi `main.rs` (SELESAI)
 
 ### 1.1 Masalah Sebelumnya
-Berkas [`ctrl-cli/src/main.rs`](../src/main.rs) sebelumnya membengkak hingga **3.636 baris (~160 KB)** yang mencakup:
+Berkas [`ctrl-cli/src/main.rs`](../ctrl-cli/src/main.rs) sebelumnya membengkak hingga **3.636 baris (~160 KB)** yang mencakup:
 - Definisi parser CLI Clap
 - Manajemen profil pengguna & preferensi bahasa
 - Adaptor skill persona agen
@@ -31,26 +31,26 @@ Berkas [`ctrl-cli/src/main.rs`](../src/main.rs) sebelumnya membengkak hingga **3
 
 ### 1.2 Implementasi Pemecahan Modul
 Struktur kini telah didekomposisi secara modular, bersih, dan idiomatik:
-1. **[`ctrl-cli/src/cli.rs`](../src/cli.rs)**: Parser argumen CLI Clap (`Cli`, `Commands`).
-2. **[`ctrl-cli/src/profile.rs`](../src/profile.rs)**: Manajemen profil pengembang (`UserProfile`, `SupportedLanguage`, load/save).
-3. **[`ctrl-cli/src/skill.rs`](../src/skill.rs)**: Struktur persona agen AI (`Skill`, `get_available_skills`).
-4. **[`ctrl-cli/src/context.rs`](../src/context.rs)**: Estimasi limit konteks & akumulasi token (`ModelContextInfo`, `SessionTokenTracker`).
-5. **[`ctrl-cli/src/formatter.rs`](../src/formatter.rs)**: Formatting output terminal, badges token, ANSI helpers, auto-save detection, dan system prompt builder.
-6. **[`ctrl-cli/src/repl/`](../src/repl/)**:
+1. **[`ctrl-cli/src/cli.rs`](../ctrl-cli/src/cli.rs)**: Parser argumen CLI Clap (`Cli`, `Commands`).
+2. **[`ctrl-cli/src/profile.rs`](../ctrl-cli/src/profile.rs)**: Manajemen profil pengembang (`UserProfile`, `SupportedLanguage`, load/save).
+3. **[`ctrl-cli/src/skill.rs`](../ctrl-cli/src/skill.rs)**: Struktur persona agen AI (`Skill`, `get_available_skills`).
+4. **[`ctrl-cli/src/context.rs`](../ctrl-cli/src/context.rs)**: Estimasi limit konteks & akumulasi token (`ModelContextInfo`, `SessionTokenTracker`).
+5. **[`ctrl-cli/src/formatter.rs`](../ctrl-cli/src/formatter.rs)**: Formatting output terminal, badges token, ANSI helpers, auto-save detection, dan system prompt builder.
+6. **[`ctrl-cli/src/repl/`](../ctrl-cli/src/repl/)**:
    - `commands.rs`: Definisi `CommandSpec`, tabel `COMMAND_SPECS`, dan fungsi autocorrect `resolve_slash_command`.
    - `completer.rs`: Autocomplete engine `SlashCompleter` berbasis `inquire`.
    - `slash.rs`: Dispatcher penanganan perintah slash `handle_slash_command` dan menu interaktif `/`.
    - `runner.rs`: Loop utama terminal `start_repl` dan eksekutor instan `handle_generate`.
    - `mod.rs`: Re-export publik modular.
-7. **[`ctrl-cli/src/telemetry/`](../src/telemetry/)**: Didefinisikan secara mandiri di `src/server.rs` dan diekspos di root `src/main.rs` (`pub use server::telemetry;`) untuk menjaga kompatibilitas 100% dengan seluruh integrasi test suite dan bebas dari peringatan `clippy::duplicate_mod`.
-8. **[`ctrl-cli/src/main.rs`](../src/main.rs)**: Berkas titik masuk ramping (~180 baris logika utama) yang bersih dan terisolasi.
+7. **[`ctrl-cli/src/telemetry/`](../ctrl-cli/src/telemetry/)**: Didefinisikan secara mandiri di `src/server.rs` dan diekspos di root `src/main.rs` (`pub use server::telemetry;`) untuk menjaga kompatibilitas 100% dengan seluruh integrasi test suite dan bebas dari peringatan `clippy::duplicate_mod`.
+8. **[`ctrl-cli/src/main.rs`](../ctrl-cli/src/main.rs)**: Berkas titik masuk ramping (~180 baris logika utama) yang bersih dan terisolasi.
 
 ---
 
 ## ✅ Opsi 2: Directory Cleanup & Sinkronisasi Dokumentasi (SELESAI)
 
 ### 2.1 Masalah Sebelumnya
-- Terdapat aturan di [`AGENTS.md`](../../AGENTS.md) mengenai **Dual-Tier README** (root `README.md` untuk gambaran umum repositori, dan `ctrl-cli/README.md` untuk paket Crates.io). Keduanya perlu selalu diaudit dan disinkronkan terhadap fitur terbaru (seperti flag `-t` / `--tui`, subcommand `serve`, streaming SSE, `/undo`, dan 15 built-in tool).
+- Terdapat aturan di [`AGENTS.md`](../AGENTS.md) mengenai **Dual-Tier README** (root `README.md` untuk gambaran umum repositori, dan `ctrl-cli/README.md` untuk paket Crates.io). Keduanya perlu selalu diaudit dan disinkronkan terhadap fitur terbaru (seperti flag `-t` / `--tui`, subcommand `serve`, streaming SSE, `/undo`, dan 15 built-in tool).
 - Di root repositori terdapat berkas-berkas catatan ad-hoc (`TEST_READY.md`, `TEST_INFRA.md`, `DEAD_ENDS.md`, `ORIGINAL_REQUEST.md`, dan `PROJECT.md`) yang mengacaukan kerapian root direktori dan menimbulkan duplikasi referensi.
 - Dokumentasi antara direktori root `docs/` dan `ctrl-cli/docs/` belum tersinkronisasi penuh (`PERFORMANCE.md` hanya ada di `ctrl-cli/docs/`, sedangkan `CLEANUP_BACKLOG.md` hanya ada di `docs/`).
 
@@ -59,7 +59,7 @@ Struktur kini telah didekomposisi secara modular, bersih, dan idiomatik:
    - Berkas ad-hoc (`PROJECT.md`, `DEAD_ENDS.md`, `TEST_INFRA.md`, `TEST_READY.md`, `ORIGINAL_REQUEST.md`) telah dipindahkan dari root direktori ke `docs/archive/` dan disinkronkan ke `ctrl-cli/docs/archive/`.
    - Root repositori kini bersih dan terstandarisasi, hanya menyisakan berkas otoritatif: `AGENTS.md`, `README.md`, `.gitignore`, dan skrip peluncur launcher (`tui.ps1`, `tui.cmd`, `tui.sh`).
 2. **Master Index & Documentation Hub (`docs/README.md`)**:
-   - Berkas [`docs/README.md`](../../docs/README.md) dan [`ctrl-cli/docs/README.md`](./README.md) diperbarui sebagai katalog navigasi terpadu yang memetakan seluruh dokumentasi ke dalam 4 kategori hierarkis:
+   - Berkas [`docs/README.md`](./README.md) dan [`ctrl-cli/docs/README.md`](../ctrl-cli/docs/README.md) diperbarui sebagai katalog navigasi terpadu yang memetakan seluruh dokumentasi ke dalam 4 kategori hierarkis:
      - *AI Agent Operational Rules & Handbook* (`AGENTS.md`, `AI_AGENT_GUIDE.md`)
      - *Architecture & Technical Specs* (`ARCHITECTURE.md`, `TOOLS_REFERENCE.md`, `PERFORMANCE.md`, `UPDATE_NOTES.md`, `CONFIGURATION.md`, `ROADMAP.md`)
      - *Maintenance & Backlog* (`CLEANUP_BACKLOG.md`)
